@@ -159,6 +159,70 @@ plot_single_drug_heatmap <- function(prob_list) {
 }
 
 # ------ main excute --------
+# 260219 
+# 1. Train the FINAL model on 100% of the data for the figure
+# Setting importance = TRUE is crucial to get %IncMSE, which is the most robust metric
+set.seed(123)
+rf_final <- randomForest(x = X, y = y, ntree = 500, importance = TRUE)
+# 2. Extract Feature Importance
+# type = 1 extracts %IncMSE (Percent Increase in Mean Squared Error if the gene is permuted)
+imp_matrix <- importance(rf_final, type = 1)
+imp_df <- data.frame(
+  Gene = rownames(imp_matrix),
+  Importance = as.numeric(imp_matrix[, 1])
+)
+
+# 3. Annotate Genes by Biological Group
+# Using your exact gene lists
+imp_df <- imp_df %>%
+  mutate(
+    Group = case_when(
+      Gene %in% anabolic ~ "Anabolic",
+      Gene %in% inflammatory ~ "Inflammatory",
+      Gene %in% housekeeping ~ "Housekeeping",
+      TRUE ~ "Other"
+    )
+  ) %>%
+  # Sort by importance and select the top 20 for a clean figure
+  arrange(desc(Importance)) %>%
+  slice_head(n = 20) 
+
+# 4. Generate the Publication Plot
+ggplot(imp_df, aes(x = reorder(Gene, Importance), y = Importance, fill = Group)) +
+  
+  # Horizontal bars (width=0.7 leaves nice spacing, size=0.5 adds crisp borders)
+  geom_bar(stat = "identity", color = "black", size = 0.5, width = 0.7) +
+  
+  # Flip coordinates so gene names are easily readable on the Y-axis
+  coord_flip() +
+  
+  # Color mapping matching the NPG palette from the previous scatter plot
+  scale_fill_manual(
+    values = c(
+      "Anabolic" = "#E64B35FF",     # NPG Red
+      "Inflammatory" = "#3C5488FF", # NPG Dark Blue
+      "Housekeeping" = "grey70"     # Neutral Grey
+    )
+  ) +
+  
+  # Clean, minimalist theme
+  theme_classic() +
+  theme(
+    axis.text.y = element_text(size = 11, face = "italic", color = "black"), # Italicize gene symbols!
+    axis.text.x = element_text(size = 11, color = "black"),
+    axis.title = element_text(size = 13, face = "bold"),
+    legend.position = c(0.8, 0.2), # Inset legend to save space
+    legend.background = element_rect(color = "black", fill = "white", size = 0.5),
+    legend.title = element_blank()
+  ) +
+  labs(
+    title = "Figure 3G: ML Feature Importance",
+    x = "Gene Symbol",
+    y = "Importance (% Increase in MSE)"
+  )
+
+
+# 251230
 # Load the best-performing Random Forest model, when the training was done with mac.sct69
 rf_model <- readRDS("./Rdata/prediction/Random Forest_model.rds")
 
@@ -173,12 +237,12 @@ prob_sng0.1_rf <-prob_list_rf[[2]]
 prob_cmb0.1_rf <-prob_list_rf[[3]]
 
 # save probability
-save(prob_sng10_rf, file = "./Rdata/prediction/prob_sng10_rf.Rdata")
+save(prob_sng10_rf, file = "./Rdata/prediction/prob_sng10_rf_260219.Rdata")
 #save(prob_sng1_rf, file = "./Rdata/prediction/prob_sng1_rf.Rdata")
-save(prob_sng0.1_rf, file = "./Rdata/prediction/prob_sng0.1_rf.Rdata")
+save(prob_sng0.1_rf, file = "./Rdata/prediction/prob_sng0.1_rf_260219.Rdata")
 
 #save(prob_cmb1_rf, file = "./Rdata/prediction/prob_cmb1_rf.Rdata")
-save(prob_cmb0.1_rf, file = "./Rdata/prediction/prob_cmb0.1_rf.Rdata")
+save(prob_cmb0.1_rf, file = "./Rdata/prediction/prob_cmb0.1_rf_260219.Rdata")
 
 
 

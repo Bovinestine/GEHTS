@@ -2,17 +2,17 @@
 # author: Nathan Wooseok Lee
 
 # saving data
-pub_path <- './Rdata/pub'
+dir_path <- './Rdata/pub'
 
-save(mac.pub, file = paste0(pub_path, '/seurat_mac.pub.Rdata'))
-save(sin.pub, file = paste0(pub_path, '/seurat_sin.pub.Rdata'))
-save(cmb.pub, file = paste0(pub_path, '/seurat_cmb.pub.Rdata'))
-save(rna.pub, file = paste0(pub_path, '/seurat_rna.pub.Rdata'))
+save(mac.pub, file = paste0(dir_path, '/seurat_mac.pub.Rdata'))
+save(sin.pub, file = paste0(dir_path, '/seurat_sin.pub.Rdata'))
+save(cmb.pub, file = paste0(dir_path, '/seurat_cmb.pub.Rdata'))
+save(rna.pub, file = paste0(dir_path, '/seurat_rna.pub.Rdata'))
 
-save(mac.sct, file = paste0(pub_path, '/seurat_mac.sct.Rdata'))
-save(sin.sct, file = paste0(pub_path, '/seurat_sin.sct.Rdata'))
-save(cmb.sct, file = paste0(pub_path, '/seurat_cmb.sct.Rdata'))
-save(rna.sct, file = paste0(pub_path, '/seurat_rna.sct.Rdata'))
+save(mac.sct, file = paste0(dir_path, '/seurat_mac.sct.Rdata'))
+save(sin.sct, file = paste0(dir_path, '/seurat_sin.sct.Rdata'))
+save(cmb.sct, file = paste0(dir_path, '/seurat_cmb.sct.Rdata'))
+save(rna.sct, file = paste0(dir_path, '/seurat_rna.sct.Rdata'))
 
 
 # Load necessary data by activating the following code:
