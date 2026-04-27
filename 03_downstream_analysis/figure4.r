@@ -3,6 +3,152 @@
 # conda env: seurat4
 # date: 260302
 
+### Figure 4a (Efficacy Score visualization)
+# ==============================================================================
+# Description: Function to plot and save a boxplot of drug efficacy probabilities.
+# ==============================================================================
+
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(randomForest)
+#' Generate and Save Drug Efficacy Boxplot
+#'
+#' @param prob_sng10_raw A list or named vector of ALL raw probabilities at dose 10.
+#' @param prob_sng0.1_raw A list or named vector of ALL raw probabilities at dose 0.1.
+#' @return The boxplot with jittered datapoints.
+#' @export
+plot_efficacy_boxplot <- function(prob_sng10_raw, prob_sng0.1_raw) {
+  
+  # 1. Convert lists/vectors to data frames
+  df_10 <- stack(prob_sng10_raw)
+  colnames(df_10) <- c("Probability", "Drug")
+  df_10$Dose <- "10"
+  
+  df_01 <- stack(prob_sng0.1_raw)
+  colnames(df_01) <- c("Probability", "Drug")
+  df_01$Dose <- "0.1"
+  
+  # 2. Combine and format
+  boxplot_data <- rbind(df_10, df_01)
+  boxplot_data$Dose <- factor(boxplot_data$Dose, levels = c("0.1", "10"))
+  
+  # 3. Filter out baseline conditions
+  exclude_terms <- c('control', 'inflammatory')
+  boxplot_data <- boxplot_data[!boxplot_data$Drug %in% exclude_terms, ]
+  
+  # 4. Create the boxplot with datapoints
+  box_plot <- ggplot(boxplot_data, aes(x = Drug, y = Probability, fill = Dose)) +
+    # Boxplot: hide default outliers since geom_jitter will plot all points
+    geom_boxplot(outlier.shape = NA, alpha = 0.7, position = position_dodge(width = 0.8)) + 
+    # Jitter: plots the individual datapoints overlaid on the boxplots
+    geom_jitter(aes(color = Dose), 
+                position = position_jitterdodge(jitter.width = 0.1, dodge.width = 0.8), 
+                size = 1, alpha = 0.4) +
+    # --- CHANGE THESE TWO LINES ---
+    scale_fill_manual(values = c("0.1" = "#A6CEE3", "10" = "#1F78B4")) + 
+    scale_color_manual(values = c("0.1" = "#A6CEE3", "10" = "#1F78B4")) +
+    # ------------------------------
+    theme_minimal() +
+    theme(
+      axis.text.x = element_text(angle = 45, hjust = 1, face = "bold"),
+      axis.text.y = element_text(face = "bold"),
+      panel.grid.major.x = element_blank() # Clean up x-axis grid lines
+    ) +
+    labs(fill = "Dose (\u03BCM)", color = "Dose (\u03BCM)", 
+         x = "Drug", y = "Efficacy Probability")
+  
+  return(box_plot)
+}
+
+# refer following code files:
+# Scoringmethods.r
+# PredictionScore.r
+rf_model 
+
+# 1. Run the new extraction function to get the raw lists
+prob_list_rf_raw <- predict_all_doses_raw(rf_model, sin.sct, cmb.sct)
+
+# 2. Extract the individual doses
+prob_sng10_rf_raw <- prob_list_rf_raw[[1]]
+prob_sng0.1_rf_raw <- prob_list_rf_raw[[2]]
+
+# 3. Use the boxplot function (from the previous response)
+fig_4a_boxplot <- plot_efficacy_boxplot(prob_sng10_rf_raw, prob_sng0.1_rf_raw)
+
+# 4. View the plot
+print(fig_4a_boxplot)
+ggsave("./figures/figure4/Figure4_efficacyBoxplot260427.pdf", plot = fig_4a_boxplot, width = 6, height = 4.5, units = "in", dpi = 300)
+
+
+# ==============================================================================
+# Script Name: efficacy_heatmap.R
+# Description: Function to plot and save a heatmap of drug efficacy probabilities.
+# ==============================================================================
+
+library(ggplot2)
+
+#' Generate and Save Drug Efficacy Heatmap
+#'
+#' This function creates a heatmap comparing the mean probabilities of drug efficacy 
+#' at two different doses (0.1 and 10). It automatically filters out 'control' 
+#' and 'inflammatory' baseline conditions before plotting.
+#'
+#' @param prob_sng10 A named numeric vector of mean probabilities at dose 10.
+#' @param prob_sng0.1 A named numeric vector of mean probabilities at dose 0.1.
+#'
+#' @return The heatmap plot.
+#' @export
+#'
+#' @examples
+#' # mock_dose10 <- c(DrugA = 0.8, DrugB = 0.6, control = 0.1)
+#' # mock_dose0.1 <- c(DrugA = 0.4, DrugB = 0.3, control = 0.1)
+#' # efficacy_heatmap <- plot_efficacy_heatmap(mock_dose10, mock_dose0.1)
+plot_efficacy_heatmap <- function(prob_sng10, prob_sng0.1) {
+  
+  # 1. Filter out baseline conditions
+  exclude_terms <- c('control', 'inflammatory')
+  prob_10_filtered <- prob_sng10[!names(prob_sng10) %in% exclude_terms]
+  prob_01_filtered <- prob_sng0.1[!names(prob_sng0.1) %in% exclude_terms]
+
+  # 2. Prepare data for ggplot
+  heatmap_data <- data.frame(
+    Drug = c(names(prob_10_filtered), names(prob_01_filtered)),
+    Dose = factor(c(rep("10", length(prob_10_filtered)), 
+                    rep("0.1", length(prob_01_filtered))), 
+                  levels = c("0.1", "10")), # Setting levels keeps y-axis ordered
+    MeanProbability = c(prob_10_filtered, prob_01_filtered)
+  )
+
+  # 3. Create the heatmap
+  heatmap_plot <- ggplot(heatmap_data, aes(x = Drug, y = Dose, fill = MeanProbability)) +
+    geom_tile(color = "white", linewidth = 0.2) + # Added subtle grid lines for clarity
+    scale_fill_viridis_c(option = "viridis", na.value = "white") + # Built into ggplot2
+    coord_fixed() + 
+    theme_minimal() +
+    theme(
+      axis.text.x = element_text(angle = 45, hjust = 1, face = "bold"),
+      axis.text.y = element_text(face = "bold"),
+      panel.grid = element_blank() # Removes distracting background grid
+    ) +
+    labs(fill = "Mean\nProbability", x = "Drug", y = "Dose (\u03BCM)") # Added micromolar symbol
+
+  # 6. Return filepath invisibly 
+  return(heatmap_plot)
+}
+
+# refer following code files:
+# Scoringmethods.r
+# PredictionScore.r
+rf_model 
+prob_list_rf <- predict_all_doses(rf_model, sin.sct, cmb.sct)
+prob_sng10_rf <-prob_list_rf[[1]]
+prob_sng0.1_rf <-prob_list_rf[[2]]
+prob_cmb0.1_rf <-prob_list_rf[[3]]
+
+# Example usage
+fig_4a <- plot_efficacy_heatmap(prob_sng10_rf, prob_sng0.1_rf)
+
 
 library(Seurat)
 library(dplyr)

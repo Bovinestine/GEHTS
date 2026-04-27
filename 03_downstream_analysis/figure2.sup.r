@@ -198,6 +198,115 @@ draw_boxplots_for_genes_with_common_legend <- function(seurat_object,
   return(final_plot)
 }
 
+# Anabolic and Catabolic gene sum bar plots
+sum_genes_and_plot(mac.sct, pdf_width = 3, pdf_height = 2.5, base_font_size = 7, pdf_file='./figures/figure2/figure2c_barplot.pdf')#251230
+
+# Function to calculate sum of gene counts per category for each cell and save plot as PDF
+sum_genes_and_plot <- function(seurat_object, 
+                               anabolic_genes = anabolic,
+                               inflammatory_genes = inflammatory, 
+                               control_label = "control",
+                               treatment_label = "inflammatory",
+                               pdf_file = "./figures/figure2/sum_genes_and_barplot.pdf",
+                               pdf_width = 4, 
+                               pdf_height = 6,
+                               base_font_size = 10,
+                               datatype = 'counts',
+                               common_x_label = "",
+                               common_y_label = "Sum of normalized gene counts",
+                               title1 = "Anabolic Gene",
+                               title2 = "Catabolic Gene") {
+  
+  # Add computed sums to the Seurat object's metadata
+  seurat_object[["anabolic_sum"]] <- Matrix::colSums(GetAssayData(seurat_object, slot = datatype)[anabolic_genes, , drop = FALSE])
+  seurat_object[["inflammatory_sum"]] <- Matrix::colSums(GetAssayData(seurat_object, slot = datatype)[inflammatory_genes, , drop = FALSE])
+  
+  # Subset cells by condition (using the given metadata field)
+  control_cells <- subset(seurat_object, subset = drug_condition == control_label)
+  treatment_cells <- subset(seurat_object, subset = drug_condition == treatment_label)
+  
+  # Change the treatment label if any
+  if (treatment_label == 'inflammatory'){
+    treatment_label <- "IL-1β"
+  }
+
+  # Prepare data frames for each gene group:
+  anabolic_df <- data.frame(
+    condition = rep(c(control_label, treatment_label),
+                    times = c(nrow(control_cells@meta.data), nrow(treatment_cells@meta.data))),
+    sum = c(control_cells@meta.data$anabolic_sum, treatment_cells@meta.data$anabolic_sum)
+  )
+  
+  inflammatory_df <- data.frame(
+    condition = rep(c(control_label, treatment_label),
+                    times = c(nrow(control_cells@meta.data), nrow(treatment_cells@meta.data))),
+    sum = c(control_cells@meta.data$inflammatory_sum, treatment_cells@meta.data$inflammatory_sum)
+  )
+  
+  # Determine maximum y values for proper label placement
+  # anabolic_ymax <- max(anabolic_df$sum, na.rm = TRUE)
+  # inflammatory_ymax <- max(inflammatory_df$sum, na.rm = TRUE)
+  anabolic_ymax <- boxplot.stats(anabolic_df$sum)$stats[5]
+  inflammatory_ymax <- boxplot.stats(inflammatory_df$sum)$stats[5]
+
+  
+  # Create the anabolic gene plot (remove axis titles so common labels can be added later)
+  p_anabolic <- ggplot(anabolic_df, aes(x = condition, y = sum, fill = condition)) +
+    geom_boxplot(outliers = FALSE) +
+    #stat_compare_means(aes(group = condition), label = "p.format", 
+    #                   label.y = anabolic_ymax * 1.05, size = base_font_size * 0.6) +
+    stat_compare_means(comparisons=list(c(control_label,treatment_label)), label = 'p.signif', 
+                        label.y = anabolic_ymax * 1.05, size = base_font_size) +
+    labs(title = title1) +
+    theme_classic() +
+    theme(text = element_text(size = base_font_size),
+          # legend.position = "top",
+          axis.title.x = element_blank(),
+          axis.title.y = element_blank(),
+          plot.title = element_text(face = "plain", hjust = 0.5, size = base_font_size + 2))
+  
+  # Create the inflammatory gene plot (also remove individual axis titles)
+  p_inflammatory <- ggplot(inflammatory_df, aes(x = condition, y = sum, fill = condition)) +
+    geom_boxplot(outliers = FALSE) +
+    #stat_compare_means(aes(group = condition), label = "p.format", 
+    #                   label.y = inflammatory_ymax * 1.05, size = base_font_size * 0.6) +
+    stat_compare_means(comparisons=list(c(control_label, treatment_label)), label = 'p.signif', 
+                        label.y = inflammatory_ymax * 1.05, size = base_font_size) +
+    labs(title = title2) +
+    theme_classic() +
+    theme(text = element_text(size = base_font_size),
+          # legend.position = "top",
+          axis.title.x = element_blank(),
+          axis.title.y = element_blank(),
+          plot.title = element_text(face = "plain", hjust = 0.5, size = base_font_size + 2))
+  
+  p_anabolic$layers[[2]]$aes_params$textsize <- base_font_size
+  p_inflammatory$layers[[2]]$aes_params$textsize <- base_font_size
+
+  # Combine the two plots side by side with a single (collected) legend at the top.
+  #combined_patch <- (p_anabolic + p_inflammatory + plot_layout(guides = "collect")) &
+  #  theme(legend.position = "top", legend.key.height = unit(0.3, "cm"),
+  #    legend.margin = margin(t = 2, b = 2))
+  combined_patch <- (p_anabolic + p_inflammatory + plot_layout(guides = "collect")) &
+    theme(legend.position = "none")
+  
+  
+  
+  # Now, add common x and y axis labels using cowplot. Note that you may need to adjust
+  # the x and y positions (here 0.5 and 0 for x label; 0 and 0.5 for y label) and vertical/horizontal justification.
+  final_plot <- ggdraw(combined_patch) +
+    draw_label(common_x_label, x = 0.5, y = 0, vjust = -1.2, size = base_font_size + 2) +
+    draw_label(common_y_label, x = 0, y = 0.5, angle = 90, vjust = 1.2, size = base_font_size + 2)
+  
+  # Save the final figure to a PDF file
+  pdf(file = pdf_file, width = pdf_width, height = pdf_height)
+  print(final_plot)
+  dev.off()
+  
+  invisible(final_plot)
+}
+
+
 ### test edge effect in a chip
 # 260105
 
@@ -332,6 +441,109 @@ if (nrow(plot_data) > 0) {
   stop("Error: plot_data is empty. Check 'well_no' format in your object.")
 }
 
+### Primary cell VS ATDC5 cell line Heatmap
+library(Seurat)
+library(pheatmap) # Note: pheatmap is standard for this specific call, though ComplexHeatmap::pheatmap works too.
+
+#' Plot CLR-Normalized Heatmap (Primary vs. ATDC5)
+#'
+#' Extracts raw counts for a specific gene panel from two Seurat objects, 
+#' calculates Centered Log-Ratio (CLR) normalization manually, and generates 
+#' an academic-grade annotated heatmap.
+#'
+#' @param seu_primary Seurat object for the Primary cells. Not normalized data
+#' @param seu_atdc5 Seurat object for the ATDC5 cells. Not normalized data
+#' @param genes_of_interest Character vector of genes to include in the heatmap.
+#' @param assay Character, the assay to pull data from (default: "RNA").
+#' @param layer Character, the layer/slot to pull raw counts from (default: "counts").
+#' @return A pheatmap object.
+#' @export
+plot_clr_heatmap <- function(seu_primary, seu_atdc5, genes_of_interest, 
+                             assay = "RNA", layer = "counts") {
+  
+  # ==============================================================================
+  # 1. DATA EXTRACTION & SAFETY CHECKS
+  # ==============================================================================
+  # Ensure genes exist in both objects to prevent out-of-bounds errors
+  valid_genes <- intersect(genes_of_interest, rownames(seu_primary[[assay]]))
+  valid_genes <- intersect(valid_genes, rownames(seu_atdc5[[assay]]))
+  
+  if (length(valid_genes) < length(genes_of_interest)) {
+    warning("Some genes were not found in the Seurat objects and were dropped.")
+  }
+  
+  # Extract raw counts
+  counts_primary <- GetAssayData(seu_primary, assay = assay, layer = layer)[valid_genes, , drop = FALSE]
+  counts_atdc5   <- GetAssayData(seu_atdc5, assay = assay, layer = layer)[valid_genes, , drop = FALSE]
+  
+  # ==============================================================================
+  # 2. CLR NORMALIZATION
+  # ==============================================================================
+  # Internal function to calculate Centered Log-Ratio (CLR)
+  clr_function <- function(x) {
+    # Add pseudocount of 1 to avoid log(0)
+    geo_mean <- exp(mean(log(x + 1)))
+    return(log((x + 1) / geo_mean))
+  }
+  
+  # Apply CLR to columns (individual cells)
+  norm_primary <- apply(counts_primary, 2, clr_function)
+  norm_atdc5   <- apply(counts_atdc5, 2, clr_function)
+  
+  # Combine matrices for plotting
+  norm_combined <- cbind(norm_primary, norm_atdc5)
+  
+  # ==============================================================================
+  # 3. ANNOTATIONS & PALETTES
+  # ==============================================================================
+  # Create annotation dataframe for the top color bar
+  annotation_df <- data.frame(
+    CellType = c(rep("Primary", ncol(norm_primary)), 
+                 rep("ATDC5", ncol(norm_atdc5)))
+  )
+  rownames(annotation_df) <- colnames(norm_combined)
+  
+  # Match NPG-inspired palette from previous figures for cohesion
+  ann_colors <- list(
+    CellType = c("Primary" = "#00A087",  # NPG Teal
+                 "ATDC5"   = "#F39B7F")  # NPG Muted Orange
+  )
+  
+  # ==============================================================================
+  # 4. GENERATE HEATMAP
+  # ==============================================================================
+  # Generate and return the heatmap
+  hm <- pheatmap(
+    mat = norm_combined,
+    
+    # Visuals: Blue-White-Red standard expression gradient
+    color = colorRampPalette(c("navy", "white", "firebrick3"))(100),
+    breaks = seq(-2, 2, length.out = 100), # Force scale bounds for CLR
+    
+    # Clustering
+    cluster_rows = TRUE,   # Group biologically similar genes
+    cluster_cols = FALSE,  # Keep Primary and ATDC5 as separate visual blocks
+    
+    # Annotations
+    annotation_col = annotation_df,
+    annotation_colors = ann_colors,
+    show_colnames = FALSE, # Hide individual cell barcodes
+    
+    # Labels & Formatting
+    main = paste0("CLR Relative Expression (Normalized to ", length(valid_genes), "-Gene Geometric Mean)"),
+    fontsize_row = 10,
+    fontface_row = "italic", # Standard nomenclature for gene symbols
+    angle_col = 45           # Angle column labels if they are ever turned on
+  )
+  
+  return(hm)
+}
+
+# ==============================================================================
+# EXAMPLE USAGE:
+# seu_atdc5 could be found in the GSE database 
+# my_heatmap <- plot_clr_heatmap(seu_primary, seu_atdc5, genes_of_interest)
+# ==============================================================================
 
 ### Figure 2e Old (UMAP cluster heatmap)
 library(ggplot2)

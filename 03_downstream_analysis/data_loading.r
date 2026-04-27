@@ -30,8 +30,12 @@ load(paste0(dir_path, '/seurat_sin.sct.Rdata'))
 load(paste0(dir_path, '/seurat_cmb.sct.Rdata')) 
 load(paste0(dir_path, '/seurat_rna.sct.Rdata')) 
 
+# RNA-seq datasets for comparison
+# Primary mouse chondrocyte
 library(SeuratDisk)
 macSebastian <- readRDS('./RNA-seq/macCtrl_sebastian.rds')# healthy mac RNA-seq data (filtered and SCTransformed) from Sebastian 2021
+# ATDC5 cell line (GSE269585)
+
 
 # probability of efficacy of drugs
 # random forest model probability
@@ -44,7 +48,7 @@ load(paste0(dir_path, '/prediction/prob_cmb0.1_rf.Rdata'))
 "Elastic Net", "Random Forest", "XGBoost", "SVR", "GPR"
 
 en_model <- readRDS("./Rdata/prediction/Elastic Net_model.rds")
-rf_model <- readRDS("./Rdata/prediction/Random Forest_model.rds")
+rf_model <- readRDS("./Rdata/prediction/Random_forest_model.rds")
 xgb_model <- readRDS("./Rdata/prediction/XGBoost_model.rds")
 svr_model <- readRDS("./Rdata/prediction/SVR_model.rds")
 gpr_model <- readRDS("./Rdata/prediction/GPR_model.rds")

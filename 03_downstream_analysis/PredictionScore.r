@@ -5,7 +5,107 @@
 # env: conda activate seurat4 / issr
 
 # ------- Function definition -------
+# Predict single drug efficacy (Returns raw probabilities per cell)
+predict_raw_generic <- function(seurat_object, model) {
+  # Extract and transpose expression
+  drug_data <- GetAssayData(seurat_object, assay = "SCT", slot = "counts")
+  drug_data <- t(as.matrix(drug_data))
 
+  # Align features by model type
+  if (inherits(model, "xgb.Booster")) {
+    if (!is.null(model$feature_names)) {
+      drug_data <- drug_data[, model$feature_names, drop = FALSE]
+    }
+    predicted_scores <- predict(model, newdata = drug_data)
+
+  } else if (inherits(model, "cv.glmnet")) {
+    model_features <- rownames(coef(model, s = "lambda.min"))[-1] 
+    model_features <- intersect(model_features, colnames(drug_data))
+    drug_data <- drug_data[, model_features, drop = FALSE]
+    predicted_scores <- predict(model, newx = drug_data, s = "lambda.min", type = "response")[,1]
+
+  } else if (inherits(model, "randomForest")) {
+    predicted_scores <- predict(model, newdata = drug_data)
+
+  } else if (inherits(model, "gausspr")) {
+    predicted_scores <- predict(model, newdata = drug_data)
+
+  } else {
+    stop("Unsupported model type for prediction.")
+  }
+
+  # Group raw predictions by drug name into a list (instead of averaging)
+  drug_names <- seurat_object@meta.data$drug_name
+  raw_scores_list <- split(predicted_scores, drug_names)
+  
+  return(raw_scores_list)
+}
+
+# Predict combo drug efficacy (Returns raw probabilities per cell)
+predict_raw_generic_cmb <- function(seurat_object, model) {
+  # Extract and transpose expression
+  drug_data <- GetAssayData(seurat_object, assay = "SCT", slot = "counts")
+  drug_data <- t(as.matrix(drug_data))
+
+  # Align features by model type
+  if (inherits(model, "xgb.Booster")) {
+    if (!is.null(model$feature_names)) {
+      drug_data <- drug_data[, model$feature_names, drop = FALSE]
+    }
+    predicted_scores <- predict(model, newdata = drug_data)
+
+  } else if (inherits(model, "cv.glmnet")) {
+    model_features <- rownames(coef(model, s = "lambda.min"))[-1] 
+    model_features <- intersect(model_features, colnames(drug_data))
+    drug_data <- drug_data[, model_features, drop = FALSE]
+    predicted_scores <- predict(model, newx = drug_data, s = "lambda.min", type = "response")[,1]
+
+  } else if (inherits(model, "randomForest")) {
+    predicted_scores <- predict(model, newdata = drug_data)
+
+  } else if (inherits(model, "gausspr")) {
+    predicted_scores <- predict(model, newdata = drug_data)
+
+  } else {
+    stop("Unsupported model type for prediction.")
+  }
+
+  # Construct custom combination names
+  drug_names1 <- seurat_object@meta.data$drug_name1
+  drug_names2 <- seurat_object@meta.data$drug_name2
+  combo_names <- paste0(drug_names1, "&", drug_names2)
+
+  # Group raw predictions by custom drug combination name
+  raw_scores_list <- split(predicted_scores, combo_names)
+
+  return(raw_scores_list)
+}
+
+# Wrapper function to get all raw dose data
+predict_all_doses_raw <- function(model, single_seurat, combo_seurat) {
+  
+  # Subset single-drug data by dose
+  single_cmb10 <- subset(single_seurat, subset = dose == 10)
+  single_cmb0.1 <- subset(single_seurat, subset = dose == 0.1)
+
+  # Subset combo-drug data by dose
+  cmb0.1 <- subset(combo_seurat, subset = dose1 == 0.1)
+
+  # Predict for single-drug (RAW)
+  prob_sng10_raw <- predict_raw_generic(single_cmb10, model)
+  prob_sng0.1_raw <- predict_raw_generic(single_cmb0.1, model)
+
+  # Predict for combinations (RAW)
+  prob_cmb0.1_raw <- predict_raw_generic_cmb(cmb0.1, model)
+
+  return(list(
+    prob_sng10_raw = prob_sng10_raw,
+    prob_sng0.1_raw = prob_sng0.1_raw,
+    prob_cmb0.1_raw = prob_cmb0.1_raw
+  ))
+}
+
+# ------- Old function definition -----
 predict_and_average_generic <- function(seurat_object, model) {
   # Extract and transpose expression
   drug_data <- GetAssayData(seurat_object, assay = "SCT", slot = "counts")

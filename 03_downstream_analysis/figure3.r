@@ -4,514 +4,443 @@
 # Date of update: 250711, 250827 (wide gene expression), 251223 (gene group)
 # env: conda activate seurat4 / issr
 
-# functions for figure 3.
-# Ensure required packages are loaded
-library(ggplot2)
-library(ggpubr)     # for stat_compare_means()
-library(cowplot)    # for ggdraw() and draw_label()
-library(dplyr)
-library(ggsignif)
-library(Seurat)
-library(gridExtra)
-# For reproducibility
-set.seed(123)
 # Gene categroy
 anabolic <- c('Acan','Sox9','Col2a1','Matn1','Matn3','Ucma','Ccnd3','Gadd45g','Pth1r','Gm26633','Col27a1')
 inflammatory <- c('Mmp3','Mmp13','Il6', 'Il17b','Adamts5','Igfbp3','Ccl2','Cxcl5','Cxcl1','Fosl2','Tlr2','Tnfrsf1b')
 housekeeping <- c('Hprt','Actb','Gapdh','B2m','Ubc','Ppia','Rpl23')
 
 ### Figure 3b (GEheatmap)
-create_heatmap_by_expression_ps(sin.sct, upper_threshold = 0, bottom_threshold = 1, 
-                                assay='SCT', slot='counts', primary_metadata = 'dose', secondary_metadata = 'drug_name',
-                                pdf_file = './figures/figure3/fig3b_GEheatmap.pdf', pdf_width = 7, pdf_height = 5) 
+# ==============================================================================
+# Script Name: figure3b_heatmap.R
+# Description: Generates a gene expression heatmap (Figure 3b) categorizing 
+#              anabolic, inflammatory (catabolic), and housekeeping genes.
+# ==============================================================================
 
-create_heatmap_by_expression_ps <- function(seurat_object, upper_threshold = 0, bottom_threshold = 1, 
-                                           assay = 'SCT', slot = 'counts', 
-                                           primary_metadata = 'dose', secondary_metadata = 'drug_name', 
-                                           log1p = TRUE, pdf_file = "heatmap_expression.pdf", pdf_width = 5, pdf_height = 5) {
-  # Get expression data
+suppressPackageStartupMessages({
+  library(Seurat)
+  library(dplyr)
+  library(pheatmap)
+  library(ggsci) # Added for NPG and JCO color palettes
+})
+
+# ------------------------------------------------------------------------------
+# 1. Define Gene Categories
+# ------------------------------------------------------------------------------
+genes_anabolic <- c('Acan', 'Sox9', 'Col2a1', 'Matn1', 'Matn3', 'Ucma', 
+                    'Ccnd3', 'Gadd45g', 'Pth1r', 'Gm26633', 'Col27a1')
+
+genes_inflammatory <- c('Mmp3', 'Mmp13', 'Il6', 'Il17b', 'Adamts5', 'Igfbp3', 
+                        'Ccl2', 'Cxcl5', 'Cxcl1', 'Fosl2', 'Tlr2', 'Tnfrsf1b')
+
+genes_housekeeping <- c('Hprt', 'Actb', 'Gapdh', 'B2m', 'Ubc', 'Ppia', 'Rpl23')
+
+# ------------------------------------------------------------------------------
+# 2. Main Heatmap Function
+# ------------------------------------------------------------------------------
+
+#' Create Gene Expression Heatmap Categorized by Phenotype
+#'
+#' Extracts assay data from a Seurat object, filters genes by expression quantiles,
+#' groups cells by specified metadata, and generates an annotated pheatmap using 
+#' publication-ready ggsci color palettes.
+#'
+#' @param seurat_object A processed Seurat object.
+#' @param upper_threshold Upper quantile limit for filtering genes (default: 0).
+#' @param bottom_threshold Lower quantile limit for filtering genes (default: 1).
+#' @param assay Name of the assay to pull data from (default: 'SCT').
+#' @param slot Name of the slot to pull data from (default: 'counts').
+#' @param primary_metadata Column name in meta.data for primary grouping (e.g., 'dose').
+#' @param secondary_metadata Column name in meta.data for secondary grouping (e.g., 'drug_name').
+#' @param log1p Logical; whether to apply log1p transformation to the data (default: TRUE).
+#'
+#' @return The heatmap plot.
+#' @export
+create_heatmap_by_expression_ps <- function(seurat_object, 
+                                            upper_threshold = 0, 
+                                            bottom_threshold = 1, 
+                                            assay = 'SCT', 
+                                            slot = 'counts', 
+                                            primary_metadata = 'dose', 
+                                            secondary_metadata = 'drug_name', 
+                                            log1p = TRUE) {
+  
+  # --- Step 1: Extract and Filter Expression Data ---
   expression_data <- GetAssayData(seurat_object, assay = assay, slot = slot)
-
-  # Ensure there are no non-finite values
+  
   expression_data <- expression_data[, colSums(is.finite(expression_data)) > 0]
-
   average_expression <- rowMeans(expression_data, na.rm = TRUE)
-
-  # Identify highly expressed and barely expressed genes
-  selected_genes <- names(average_expression[average_expression >= quantile(average_expression, 1 - bottom_threshold) & 
-                                               average_expression <= quantile(average_expression, 1 - upper_threshold)])
-  title <- "Zoomed in Expressed Genes"
-
-  # Split selected genes into categories
-  selected_anabolic_genes <- intersect(selected_genes, anabolic)
-  selected_inflammatory_genes <- intersect(selected_genes, inflammatory)
-  selected_housekeeping_genes <- intersect(selected_genes, housekeeping)
-
-  # Combine and sort genes within each category
+  
+  q_bottom <- quantile(average_expression, 1 - bottom_threshold)
+  q_top    <- quantile(average_expression, 1 - upper_threshold)
+  selected_genes <- names(average_expression[average_expression >= q_bottom & 
+                                               average_expression <= q_top])
+  
+  # --- Step 2: Categorize and Sort Genes ---
+  selected_anabolic <- intersect(selected_genes, genes_anabolic)
+  selected_inflam   <- intersect(selected_genes, genes_inflammatory)
+  selected_housek   <- intersect(selected_genes, genes_housekeeping)
+  
   sorted_selected_genes <- c(
-    selected_anabolic_genes[order(average_expression[selected_anabolic_genes], decreasing = TRUE)],
-    selected_inflammatory_genes[order(average_expression[selected_inflammatory_genes], decreasing = TRUE)],
-    selected_housekeeping_genes[order(average_expression[selected_housekeeping_genes], decreasing = TRUE)]
+    selected_anabolic[order(average_expression[selected_anabolic], decreasing = TRUE)],
+    selected_inflam[order(average_expression[selected_inflam], decreasing = TRUE)],
+    selected_housek[order(average_expression[selected_housek], decreasing = TRUE)]
   )
-
-  # Prepare cell scores with primary and secondary metadata
+  
+  # --- Step 3: Prepare Cell Metadata and Grouping ---
   cell_scores <- data.frame(
     cell_name = rownames(seurat_object@meta.data),
-    primary = seurat_object@meta.data[[primary_metadata]],
+    primary   = seurat_object@meta.data[[primary_metadata]],
     secondary = seurat_object@meta.data[[secondary_metadata]],
     stringsAsFactors = FALSE
   )
-
-  # Group samples by primary and then secondary metadata
-  cell_scores <- cell_scores %>%
-    arrange(primary, secondary)
-
-  # Function to create heatmap
-  create_heatmap <- function(genes, data, cell_scores, title, log1p, pdf_file) {
-    data_for_heatmap <- data[genes, cell_scores$cell_name] # Reorder columns based on cell_scores$cell_name
-
-    if (log1p) {
-      # Log-transform the data
-      data_for_heatmap <- log1p(data_for_heatmap)
-    }
-
-    # Calculate color breaks
-    data_range <- range(data_for_heatmap)
-    breaks <- seq(data_range[1], data_range[2], length.out = 101)
-    color_palette <- colorRampPalette(c("navy", "white", "firebrick3"))(length(breaks) - 1)
-
-    # Annotations
-    annotation_data <- data.frame(
-      Primary = factor(cell_scores$primary, levels = unique(cell_scores$primary)),
-      Secondary = factor(cell_scores$secondary, levels = unique(cell_scores$secondary))
-    )
-    rownames(annotation_data) <- cell_scores$cell_name
-
-    row_annotation <- data.frame(Gene_Type = factor(
-      rep(c("Anabolic", "Catabolic", "Housekeeping"), 
-          c(length(selected_anabolic_genes), length(selected_inflammatory_genes), length(selected_housekeeping_genes))),
-      levels = c("Anabolic", "Catabolic", "Housekeeping")
-    ))
-    rownames(row_annotation) <- genes
-
-    # Create custom color palette for drugs
-    n_primary <- length(unique(cell_scores$primary))
-    primary_colors <- colorRampPalette(RColorBrewer::brewer.pal(9, "Set1"))(max(n_primary, 13))
-    names(primary_colors) <- unique(cell_scores$primary)
-
-    n_secondary <- length(unique(cell_scores$secondary))
-    secondary_colors <- colorRampPalette(RColorBrewer::brewer.pal(n = 8, name = "Set2"))(max(n_secondary, 8))
-    names(secondary_colors) <- unique(cell_scores$secondary)
-
-    ann_colors <- list(
-      Gene_Type = c(Anabolic = "forestgreen", Catabolic = "orange", Housekeeping = "grey"),
-      Primary = primary_colors,
-      Secondary = secondary_colors
-    )
-
-    # Save heatmap as a PDF
-    pdf(pdf_file, width = pdf_width, height = pdf_height)
-    pheatmap::pheatmap(data_for_heatmap,
-                       cluster_rows = FALSE, 
-                       cluster_cols = FALSE,
-                       show_rownames = TRUE,
-                       show_colnames = FALSE,
-                       annotation_col = annotation_data,
-                       annotation_row = row_annotation,
-                       annotation_colors = ann_colors,
-                       color = color_palette,
-                       breaks = breaks,
-                       main = title,
-                       gaps_row = c(length(selected_anabolic_genes), length(selected_anabolic_genes) + length(selected_inflammatory_genes)))  # Add a gap between gene types
-    dev.off()
+  
+  cell_scores <- cell_scores %>% arrange(primary, secondary)
+  data_for_heatmap <- expression_data[sorted_selected_genes, cell_scores$cell_name]
+  
+  if (log1p) {
+    data_for_heatmap <- log1p(data_for_heatmap)
   }
-
-  # Create heatmap for the selected genes
-  create_heatmap(sorted_selected_genes, expression_data, cell_scores, title, log1p, pdf_file)
-
-  # Return the path to the saved PDF
-  return(pdf_file)
-}
-
-### Figure 3c: UMAP dimensional reduction for showing reproducibility and separability among drug conditions
-# targets <- c('mTOR', 'ALK', 'PI3K', 'Hedgehog','JNK', 'AKT', 'p38 MAPK', 'NF-kB', 'TNKS') # total 8 + 1 targets
-# Mapping of drugs to their targets
-drug_to_target <- c(
-  "ALK5 inhibitor IV" = "ALK",
-  "BMS-345541" = "NF-kB",
-  "CAPE" = "NF-kB",
-  "JNK inhibitor V" = "JNK",
-  "KU0063794" = "mTOR",
-  "LY294002" = "PI3K",
-  "MK-2206 dihydrochloride" = "AKT",
-  "pamapimod" = "p38 MAPK",
-  "rapamycin" = "mTOR",
-  "SANT-1" = "Hedgehog",
-  "SB203580" = "p38 MAPK",
-  "SB431542" = "ALK",
-  "SB525334" = "ALK",
-  "XAV" = "TNKS"
-)
-sin.sct$target <- drug_to_target[sin.sct$drug_name]
-
-sin.sct10 <- subset(sin.sct, subset = dose ==10) # this is for main figure
-sin.sct10 <- RunPCA(sin.sct10, assay = "SCT", npcs = 10, verbose = FALSE)
-sin.sct10 <- RunUMAP(sin.sct10, reduction = "pca", assay = "SCT", dims = 1:10, verbose = FALSE)
-
-pdf('./figures/figure3/fig3c_umap_single10.pdf', width = 6.5, height = 4)
-DimPlot(sin.sct10, reduction = "umap", group.by='drug_name') # used for figure 3 c
-dev.off()
-
-
-# Figure 3d: highliting single drug conditions at a time along side with figure 3c.
-umap_sin10 <- extractUmapData(sin.sct10, dose = 10)
-plots_sin10 <- makeDrugUmapList(umap_sin10)
-
-pdf('./figures/figure3/fig3d_umap_PamapimodXav_251230.pdf', width = 3, height = 6)
-grid.arrange(grobs= plots_sin10[c(1,13)], ncol =1) # pamapimod and XAV
-dev.off()
-
-# for supplementary data
-pdf('./figures/figure3/Sfig3d_umap_single10_1to6_251230.pdf', width = 6, height = 9)
-grid.arrange(grobs = plots_sin10[1:6], ncol = 2) # check out the all conditions
-dev.off()
-pdf('./figures/figure3/Sfig3d_umap_single10_7to12_251230.pdf', width = 6, height = 9)
-grid.arrange(grobs = plots_sin10[7:12], ncol = 2) # check out the all conditions
-dev.off()
-pdf('./figures/figure3/Sfig3d_umap_single10_8to13_251230.pdf', width = 6, height = 9)
-grid.arrange(grobs = plots_sin10[8:13], ncol = 2) # check out the all conditions
-dev.off()
-
-
-# functions
-
-extractUmapData <- function(seurat_obj, dose){
-    seurat_obj <- seurat_obj[,seurat_obj$dose == dose]
-    umap_data <- seurat_obj[["umap"]]@cell.embeddings
-    umap <- data.frame(umap_data, seurat_obj@meta.data[, c("drug_name", "dose", "target")])    
-    return(umap)
-}
-
-makeDrugUmapList <- function(umap_data){
-    lapply(unique(umap_data$drug_name), function(condition) {
-    ggplot(umap_data, aes(x = UMAP_1, y = UMAP_2, color = (drug_name == condition))) +
-        geom_point(aes(alpha = (drug_name == condition))) +
-        scale_alpha_manual(values = c("FALSE" = 0.1, "TRUE" = 0.6)) +
-        scale_color_manual(values = c("FALSE" = "gray", "TRUE" = "turquoise3")) +
-        labs(title = paste("Highlighted:", condition)) +
-        theme_classic() +
-        theme(legend.position = "none")
-    })
-}
-
-
-### Figure 3e and g
-# fig.3e
-sum_genes_and_plot_wide(mac_sin.sct, extra_label1 = 'XAV_0.1', extra_label2 = 'XAV_10', pdf_width = 2, pdf_height = 2, pdf_file='./figures/figure3/fig3e_boxplot.pdf')
-# fig.3g
-sum_genes_and_plot_wide(mac_sin.sct, extra_label1 = 'pamapimod_10', extra_label2 = 'XAV_10', pdf_width = 2, pdf_height = 2, pdf_file='./figures/figure3/fig3f_boxplot.pdf')
-
-sum_genes_and_plot_wide <- function(seurat_object, 
-                                    anabolic_genes = anabolic,
-                                    inflammatory_genes = inflammatory,
-                                    control_label = "control",
-                                    treatment_label = "inflammatory",
-                                    extra_label1 = "label3",
-                                    extra_label2 = "label4",
-                                    pdf_file = "./figures/figure3/fig3_sum_barplot.pdf",
-                                    pdf_width = 6, 
-                                    pdf_height = 6,
-                                    base_font_size = 5,
-                                    line_thickness = 0.5,
-                                    datatype = 'counts',
-                                    common_x_label = "",
-                                    common_y_label = "Sum of normalized gene counts",
-                                    title1 = "Anabolic Gene",
-                                    title2 = "Catabolic Gene",
-                                    comparisons_list = NULL) {
   
-  # Compute sums and add them to metadata
-  seurat_object[["anabolic_sum"]] <- Matrix::colSums(GetAssayData(seurat_object, slot = datatype)[anabolic_genes, , drop = FALSE])
-  seurat_object[["inflammatory_sum"]] <- Matrix::colSums(GetAssayData(seurat_object, slot = datatype)[inflammatory_genes, , drop = FALSE])
+  # --- Step 4: Configure Visuals & Annotations ---
+  # Main heatmap body color gradient
+  data_range <- range(data_for_heatmap)
+  breaks <- seq(data_range[1], data_range[2], length.out = 101)
+  color_palette <- colorRampPalette(c("navy", "white", "firebrick3"))(length(breaks) - 1)
   
-  # Create vector of conditions to include
-  conditions <- c(control_label, treatment_label, extra_label1, extra_label2)
+  # Column (Cell) Annotations
+  annotation_col <- data.frame(
+    Primary   = factor(cell_scores$primary, levels = unique(cell_scores$primary)),
+    Secondary = factor(cell_scores$secondary, levels = unique(cell_scores$secondary))
+  )
+  rownames(annotation_col) <- cell_scores$cell_name
   
-  # Subset cells having a drug_condition in the provided conditions
-  all_cells <- subset(seurat_object, subset = drug_condition %in% conditions)
-    
-  # Create data frames for anabolic and inflammatory gene sums
-  anabolic_df <- data.frame(
-    condition = all_cells@meta.data$drug_condition,
-    sum = all_cells@meta.data$anabolic_sum
+  # Row (Gene) Annotations
+  annotation_row <- data.frame(
+    Gene_Type = factor(rep(c("Anabolic", "Catabolic", "Housekeeping"), 
+                           c(length(selected_anabolic), length(selected_inflam), length(selected_housek))),
+                       levels = c("Anabolic", "Catabolic", "Housekeeping"))
+  )
+  rownames(annotation_row) <- sorted_selected_genes
+  
+  # --- NEW: ggsci Color Palettes for Annotations ---
+  
+  # Interpolate JCO palette for primary metadata (e.g., dose)
+  n_primary <- length(unique(cell_scores$primary))
+  primary_colors <- colorRampPalette(pal_jco()(10))(n_primary)
+  names(primary_colors) <- unique(cell_scores$primary)
+  
+  # Interpolate NPG palette for secondary metadata (e.g., the 13 drug names)
+  n_secondary <- length(unique(cell_scores$secondary))
+  secondary_colors <- colorRampPalette(pal_npg("nrc")(10))(n_secondary)
+  names(secondary_colors) <- unique(cell_scores$secondary)
+  
+  ann_colors <- list(
+    Gene_Type = c(Anabolic = "forestgreen", Catabolic = "orange", Housekeeping = "grey"),
+    Primary   = primary_colors,
+    Secondary = secondary_colors
   )
   
-  inflammatory_df <- data.frame(
-    condition = all_cells@meta.data$drug_condition,
-    sum = all_cells@meta.data$inflammatory_sum
+  gap_row_positions <- c(length(selected_anabolic), 
+                         length(selected_anabolic) + length(selected_inflam))
+  
+  # --- Step 5: Generate Plot ---
+
+  p <- pheatmap::pheatmap(
+    mat               = data_for_heatmap,
+    cluster_rows      = FALSE, 
+    cluster_cols      = FALSE,
+    show_rownames     = TRUE,
+    show_colnames     = FALSE,
+    annotation_col    = annotation_col,
+    annotation_row    = annotation_row,
+    annotation_colors = ann_colors,
+    color             = color_palette,
+    breaks            = breaks,
+    main              = "Zoomed in Expressed Genes",
+    gaps_row          = gap_row_positions
   )
 
-  if (treatment_label == "inflammatory") {
-    new_label <- "IL-1β"
-    anabolic_df$condition[anabolic_df$condition == treatment_label] <- new_label
-    inflammatory_df$condition[inflammatory_df$condition == treatment_label] <- new_label
-    treatment_label <- new_label
-  }
-
-  # Use the upper whisker (boxplot.stats) to position p-value labels
-  anabolic_ymax <- boxplot.stats(anabolic_df$sum)$stats[5]
-  inflammatory_ymax <- boxplot.stats(inflammatory_df$sum)$stats[5]
-  
-  # Define the list of all pairwise comparisons
-  if (is.null(comparisons_list)){
-    comparisons_list <- list(
-      c(treatment_label, extra_label2),
-      c(extra_label1, extra_label2)
-    )
-  } else if (comparisons_list == 'all') {
-    comparisons_list <- combn(conditions, 2, simplify = FALSE) 
-  }
-  
-  # Create anabolic gene plot
-  p_anabolic <- ggplot(anabolic_df, aes(x = condition, y = sum, fill = condition)) +
-    geom_boxplot(outliers = FALSE) +
-    geom_signif(comparisons = comparisons_list, map_signif_level = TRUE,
-                textsize = 3, y_position = anabolic_ymax, step_increase = 0.1, tip_length = 0.01) +
-    labs(title = title1) +
-    theme_classic() +
-    theme(text = element_text(size = base_font_size),
-          axis.line = element_line(linewidth = line_thickness),
-          legend.position = "none", # REMOVED LEGEND
-          # ENABLED X AXIS TEXT (TICKS)
-          axis.text.x = element_text(size = base_font_size, angle = 45, hjust = 1, color = "black"),
-          axis.text.y = element_text(size = base_font_size),
-          axis.title.x = element_blank(),
-          axis.title.y = element_blank(),
-          plot.title = element_text(face = "plain", hjust = 0.5, size = base_font_size+2))
-  
-  # Create inflammatory gene plot
-  p_inflammatory <- ggplot(inflammatory_df, aes(x = condition, y = sum, fill = condition)) +
-    geom_boxplot(outliers = FALSE) +
-    geom_signif(comparisons = comparisons_list, map_signif_level = TRUE, 
-                textsize = 3, y_position = inflammatory_ymax, step_increase = 0.1, tip_length = 0.01) +
-    labs(title = title2) +
-    theme_classic() +
-    theme(text = element_text(size = base_font_size),
-          axis.line = element_line(linewidth = line_thickness),
-          legend.position = "none", # REMOVED LEGEND
-          # ENABLED X AXIS TEXT (TICKS)
-          axis.text.x = element_text(size = base_font_size, angle = 45, hjust = 1, color = "black"),
-          axis.text.y = element_text(size = base_font_size),
-          axis.title.x = element_blank(),
-          axis.title.y = element_blank(),
-          plot.title = element_text(face = "plain", hjust = 0.5, size = base_font_size+2))
-  
-  # Combine the two plots side by side
-  # No need to remove legend here as it is removed in theme() above
-  combined_plots <- arrangeGrob(p_anabolic, p_inflammatory, ncol = 2)
-
-  # No longer need get_legend or the grid.arrange step for the legend
-  
-  # Add common x and y axis labels using cowplot
-  # Use combined_plots directly
-  final_plot <- ggdraw(combined_plots) +
-    # Optional: If you want a common X label at the very bottom, uncomment below
-    # draw_label(common_x_label, x = 0.5, y = 0, vjust = -0.5, size = base_font_size + 2) +
-    draw_label(common_y_label, x = 0, y = 0.5, angle = 90, vjust = 1.2, size = base_font_size + 2)
-  
-  # Save the final figure to a PDF file
-  pdf(file = pdf_file, width = pdf_width, height = pdf_height)
-  print(final_plot)
-  dev.off()
-  
-  invisible(final_plot)
+  return(p)
 }
 
+# Exceution
+fig_3b <- create_heatmap_by_expression_ps(sin.sct) 
 
-### Figure 3f and h (10 gene average box plots)
+# ==============================================================================
+# Script Name: figure3c_main_umap.R
+# Description: Generates and saves the main global UMAP for a specific drug dose.
+#              Uses an interpolated NPG palette for consistency.
+# ==============================================================================
 
-genes_to_plot <- c("Col2a1", "Matn3", "Gadd45g", "Sox9", "Acan", 
-                    "Mmp3", "Mmp13", "Cxcl1", "Fosl2", "Tnfrsf1b") 
-
-# fig.3f
-draw_boxplots_for_genes_with_common_legend(mac_sin.sct, genes = genes_to_plot, extra_label1 = 'XAV_0.1', extra_label2 = 'XAV_10',
-                        pdf_file = "./figures/figure3/fig3f_boxplots.pdf",
-                        pdf_width = 4, pdf_height = 2.6, base_font_size = 6, legend_gap = 0.03)
-
-# fig.3h
-draw_boxplots_for_genes_with_common_legend(mac_sin.sct, genes = genes_to_plot, extra_label1 = 'pamapimod_10', extra_label2 = 'XAV_10',
-                        pdf_file = "./figures/figure3/fig3h_boxplots.pdf",
-                        pdf_width = 4, pdf_height = 2.6, base_font_size = 6, legend_gap = 0.03)
-# for Supplementary data: p38 inhibitor comparision
-draw_boxplots_for_genes_with_common_legend(mac_sin.sct, genes = genes_to_plot, extra_label1 = 'pamapimod_10', extra_label2 = 'SB203580_10',
-                        pdf_file = "./figures/figure3/Sfig3_boxplots_p38inhibitors.pdf",
-                        pdf_width = 4, pdf_height = 2.6, base_font_size = 6, legend_gap = 0.03)
-
-draw_boxplots_for_genes_with_common_legend <- function(seurat_object,
-                                                       genes,
-                                                       datatype = 'counts',
-                                                       control_label = "control",
-                                                       treatment_label = "inflammatory",
-                                                       extra_label1 = "label3",
-                                                       extra_label2 = "label4",
-                                                       pdf_file = "./figures/figure3/boxplots.pdf",
-                                                       pdf_width = 6,
-                                                       pdf_height = 6,
-                                                       base_font_size = 5,
-                                                       line_thickness = 0.5,
-                                                       legend_gap = 0.05,
-                                                       y_title = "Normalized gene expression (a.u)") {
+suppressPackageStartupMessages({
   library(Seurat)
   library(ggplot2)
-  library(dplyr)
-  library(gridExtra)
-  library(cowplot)
-  library(ggsignif)  # for p-value annotation
+  library(ggsci)
+})
+
+#' Generate and Save Main UMAP by Dose with NPG Colors
+#'
+#' @param seurat_obj A Seurat object containing 'dose' and 'drug_name' in meta.data.
+#' @param target_dose Numeric value of the dose to subset (default is 10).
+#' @param pcs_to_use Numeric vector specifying which principal components to use.
+#' @param seed Numeric value of the seed to set.seed() (defualt is 123).
+#'
+#' @return The processed Seurat object (invisibly) for downstream use.
+#' @export
+plot_main_umap <- function(seurat_obj, 
+                           target_dose = 10, 
+                           pcs_to_use = 1:10,
+                           seed = 123
+                           ) {
   
-  meta <- seurat_object@meta.data
-  valid_conditions <- c(control_label, treatment_label, extra_label1, extra_label2)
-  cells_to_use <- rownames(meta)[ meta$drug_condition %in% valid_conditions ]
+  message("Subsetting data for dose: ", target_dose)
+  seurat_sub <- subset(seurat_obj, subset = dose == target_dose)
   
-  meta_subset <- meta[cells_to_use, ] %>%
-    mutate(ConditionLabel = case_when(
-      drug_condition == control_label ~ "Control",
-      drug_condition == treatment_label ~ "IL-1β",
-      drug_condition == extra_label1 ~ extra_label1,
-      drug_condition == extra_label2 ~ extra_label2,
-      TRUE ~ drug_condition
-    ))
+  message("Running PCA and UMAP...")
+  set.seed(seed)
+  seurat_sub <- RunPCA(seurat_sub, assay = "SCT", npcs = max(pcs_to_use), verbose = FALSE)
+  seurat_sub <- RunUMAP(seurat_sub, reduction = "pca", assay = "SCT", dims = pcs_to_use, verbose = FALSE)
   
-  plot_list <- list()
+  # --- Generate Consistent NPG Color Dictionary ---
+  drug_names <- sort(unique(as.character(seurat_sub$drug_name)))
+  npg_colors <- colorRampPalette(pal_npg("nrc")(10))(length(drug_names))
+  names(npg_colors) <- drug_names
   
-  for (gene in genes) {
-    expr <- as.vector(GetAssayData(seurat_object, slot = datatype)[gene, cells_to_use, drop = TRUE])
-    df <- data.frame(Expression = expr,
-                     Condition = meta_subset$ConditionLabel)
+  # --- Create Plot ---
+  p <- DimPlot(seurat_sub, reduction = "umap", group.by = 'drug_name') +
+    scale_color_manual(values = npg_colors) + # Apply the NPG dictionary
+    labs(title = paste("Global UMAP (Dose =", target_dose, "\u03BCM)")) +
+    theme_classic()
     
-    # Get all pairwise comparisons (for 4 groups => 6 pairs)
-    groups <- unique(df$Condition)
-    comparisons_list <- combn(groups, 2, simplify = FALSE)
-    
-    # Estimate y-position for significance annotation
-    ymax <- boxplot.stats(df$Expression)$stats[5]
-    
-    p_gene <- ggplot(df, aes(x = Condition, y = Expression, fill = Condition)) +
-      geom_boxplot(outlier.shape = NA) +
-      geom_signif(comparisons = comparisons_list,
-                  map_signif_level = TRUE,
-                  y_position = ymax * (1 + 0.15 * seq_along(comparisons_list)),
-                  textsize = base_font_size - 1,
-                  tip_length = 0.01,
-                  step_increase = 0.05) +
-      labs(title = gene) +
+  return(p)
+}
+
+fig_3c_umap <- plot_main_umap(sin.sct)
+ggsave('D:/Research_Repository/in_situ_team/Analysis/figures/figure3/fig3c_UMAP_newColor.pdf', plot = fig_3c_umap, width = 6.5, height = 5, units = "in", dpi = 300)
+
+# ==============================================================================
+# Script Name: figure3d_highlight_umaps.R
+# Description: Generates individual UMAPs highlighting specific drug conditions (figure 3d).
+# ==============================================================================
+
+library(Seurat)
+library(ggplot2)
+library(gridExtra)
+
+# --- Internal Helper Functions ---
+
+#' Extract UMAP Data for ggplot
+#' @keywords internal
+.extract_umap_data <- function(seurat_obj) {
+  # Use Seurat's Embeddings function for safer extraction across versions
+  umap_coords <- Embeddings(seurat_obj, reduction = "umap")
+  meta_data <- seurat_obj@meta.data[, c("drug_name", "dose", "target")]
+  
+  # Combine and ensure standard column names
+  df <- data.frame(umap_coords, meta_data)
+  colnames(df)[1:2] <- c("UMAP_1", "UMAP_2") 
+  return(df)
+}
+
+#' Create List of Highlighted UMAPs
+#' @keywords internal
+.make_drug_umap_list <- function(umap_data) {
+  drugs <- unique(umap_data$drug_name)
+  
+  plot_list <- lapply(drugs, function(condition) {
+    ggplot(umap_data, aes(x = UMAP_1, y = UMAP_2, color = (drug_name == condition))) +
+      geom_point(aes(alpha = (drug_name == condition)), size = 1) +
+      scale_alpha_manual(values = c("FALSE" = 0.1, "TRUE" = 0.6)) +
+      scale_color_manual(values = c("FALSE" = "gray", "TRUE" = "turquoise3")) +
+      labs(title = paste("Highlighted:", condition)) +
       theme_classic() +
-      theme(text = element_text(size = base_font_size),
-            axis.line = element_line(linewidth = line_thickness),
-            axis.text.x = element_blank(),
-            axis.ticks.x = element_blank(),
-            axis.text.y = element_text(size = base_font_size),
-            axis.title.x = element_blank(),
-            axis.title.y = element_blank(),
-            plot.title = element_text(face = "plain", hjust = 0.5, size = base_font_size),
-            legend.position = "none")
-    
-    plot_list[[gene]] <- p_gene
-  }
+      theme(legend.position = "none",
+            plot.title = element_text(face = "bold", size = 10))
+  })
   
-  dummy_df <- data.frame(Condition = factor(c("Control", "IL-1β", extra_label1, extra_label2),
-                                            levels = c("Control", "IL-1β", extra_label1, extra_label2)),
-                         Expression = rep(0.5, 4))
-  
-  dummy_plot <- ggplot(dummy_df, aes(x = Condition, y = Expression, fill = Condition)) +
-    geom_boxplot() +
-    labs(fill = 'Condition') +
-    theme_classic() +
-    theme(legend.position = "top",
-          legend.text = element_text(size = base_font_size),
-          legend.title = element_text(size = base_font_size),
-          legend.margin = margin(0,0,0,0))
-  
-  get_legend <- function(myplot) {
-    tmp <- ggplot_gtable(ggplot_build(myplot))
-    leg <- which(sapply(tmp$grobs, function(x) x$name) == "guide-box")
-    legend <- tmp$grobs[[leg]]
-    return(legend)
-  }
-  
-  common_legend <- get_legend(dummy_plot)
-  
-  n_genes <- length(genes)
-  ncol <- ceiling(n_genes / 2)
-  grid_plots <- arrangeGrob(grobs = plot_list, ncol = ncol, nrow = 2)
-  
-  arranged_plots <- grid.arrange(common_legend, grid_plots,
-                                 ncol = 1,
-                                 heights = c(legend_gap, 1))
-  
-  final_plot <- ggdraw() +
-    draw_plot(arranged_plots, x = 0.05, y = 0, width = 0.95, height = 1) +
-    draw_label(y_title, x = 0.02, y = 0.5,
-               angle = 90, vjust = 0.5, size = base_font_size)
-  
-  if (!is.null(pdf_file)) {
-    pdf(file = pdf_file, width = pdf_width, height = pdf_height)
-    print(final_plot)
-    dev.off()
-  }
-  
-  return(final_plot)
+  # Name the list elements for easy targeted subsetting later
+  names(plot_list) <- drugs
+  return(plot_list)
 }
 
+# --- Main Exported Function ---
 
-
-
-### Figure 3i (Efficacy Score heatmap)
-# refer following code files:
-# Scoringmethods.r
-# PredictionScore.r
-
-# Combine into a single data frame
-'%notin%' <- Negate('%in%') # define negate of %in%
-prob_sng10_rf
-prob_sng0.1_rf
-
-# Example usage
-efficacy_heatmap(prob_sng10, prob_sng0.1, pdf_file = "./figures/figure3/efficacy_heatmap.pdf", 
-                     pdf_width = 5, pdf_height = 2)
-
-
-# Define a function to create a heatmap PDF
-efficacy_heatmap <- function(prob_sng10, prob_sng0.1, 
-                                 pdf_file = "heatmap_mean_probability.pdf", 
-                                 pdf_width = 5, pdf_height = 2) {
-  # Step 1: Filter out 'control' and 'inflammatory'
-  prob_sng10_filtered <- prob_sng10[!names(prob_sng10) %in% c('control', 'inflammatory')]
-  prob_sng0.1_filtered <- prob_sng0.1[!names(prob_sng0.1) %in% c('control', 'inflammatory')]
-
-  # Step 2: Prepare heatmap data
-  heatmap_data <- data.frame(
-    Drug = c(names(prob_sng10_filtered), names(prob_sng0.1_filtered)),
-    Dose = c(rep("10", length(prob_sng10_filtered)), rep("0.1", length(prob_sng0.1_filtered))),
-    MeanProbability = c(prob_sng10_filtered, prob_sng0.1_filtered)
-  )
-
-  # Step 3: Create heatmap plot
-  heatmap_plot <- ggplot(heatmap_data, aes(x = Drug, y = Dose, fill = MeanProbability)) +
-    geom_tile() +
-    scale_fill_viridis(option = 'viridis', na.value = "white") +
-    coord_fixed() +  # Ensure square tiles
-    theme_minimal() +
-    theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
-    labs(fill = "Mean Probability", x = "Drug", y = "Dose")
-
-  # Step 4: Save the plot to a PDF
-  pdf(pdf_file, width = pdf_width, height = pdf_height)
-  print(heatmap_plot)
+#' Save Grid of Highlighted UMAPs
+#'
+#' Extracts UMAP coordinates from a processed Seurat object, generates highlighted 
+#' plots for each drug, and saves a specified subset of them in a grid layout.
+#'
+#' @param seurat_obj A Seurat object that has already been run through RunUMAP().
+#' @param plot_indices Numeric vector or character vector of drugs to plot 
+#'        (e.g., 1:6, or c("Pamapimod", "XAV")).
+#' @param output_pdf Character string specifying the output PDF path.
+#' @param ncol Integer specifying the number of columns in the grid layout.
+#' @param pdf_width Numeric width of the output PDF.
+#' @param pdf_height Numeric height of the output PDF.
+#'
+#' @export
+plot_highlighted_umaps <- function(seurat_obj, 
+                                   plot_indices = NULL, 
+                                   output_pdf, 
+                                   ncol = 2,
+                                   pdf_width = 6, 
+                                   pdf_height = 9) {
+  
+  # 1. Extract data and generate all plots
+  umap_df <- .extract_umap_data(seurat_obj)
+  all_plots <- .make_drug_umap_list(umap_df)
+  
+  # 2. Subset the requested plots
+  if (is.null(plot_indices)) {
+    plots_to_print <- all_plots # Print all if none specified
+  } else {
+    plots_to_print <- all_plots[plot_indices]
+  }
+  
+  # 3. Ensure directory exists and save
+  output_dir <- dirname(output_pdf)
+  if (!dir.exists(output_dir)) dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
+  
+  pdf(output_pdf, width = pdf_width, height = pdf_height)
+  grid.arrange(grobs = plots_to_print, ncol = ncol)
   dev.off()
-
-  # Return the path to the PDF file
-  return(pdf_file)
+  
+  message("Figure 3D subset saved to: ", output_pdf)
 }
+
+
+source("scripts/figure3d_highlight_umaps.R")
+
+# 2. Generate Figure 3D permutations using the object returned above
+# Supplementary 1-6
+plot_highlighted_umaps(
+  seurat_obj = sin.sct10,
+  plot_indices = 1:6,
+  output_pdf = "./figures/figure3/umap_single10_1to6.pdf"
+)
+
+# Supplementary 7-12
+plot_highlighted_umaps(
+  seurat_obj = sin.sct10,
+  plot_indices = 7:12,
+  output_pdf = "./figures/figure3/umap_single10_7to12.pdf"
+)
+
+# Specific Highlight (Pamapimod and XAV)
+plot_highlighted_umaps(
+  seurat_obj = sin.sct10,
+  plot_indices = c(1, 13), # Alternatively, c("Pamapimod", "XAV") if names match
+  ncol = 1,
+  pdf_width = 3,
+  pdf_height = 6,
+  output_pdf = "./figures/figure3/umap_single10noHarmonyPamapimodXav.pdf"
+)
+
+# ==============================================================================
+# Script Name: phenotypic_screening.R
+# Description: Functions to generate a 2D phenotypic screening plot (Figure 3e).
+# ==============================================================================
+
+suppressPackageStartupMessages({
+  library(Seurat)
+  library(dplyr)
+  library(ggplot2)
+  library(ggrepel)
+  library(ggsci)
+})
+
+#' Generate and Save Phenotypic Screening Plot
+#' 
+#' @param seurat_obj A merged Seurat object with 'drug_name', 'dose', and 'drug_condition' in meta.data
+#' @param genes_anabolic Vector of anabolic genes
+#' @param genes_inflammatory Vector of inflammatory/catabolic genes
+#' @return The ggplot object
+plot_phenotypic_screening <- function(
+    seurat_obj, 
+    genes_anabolic, 
+    genes_inflammatory) {
+    
+  # 1. Calculate coordinates and ratios
+  DefaultAssay(seurat_obj) <- "SCT"
+  exp_matrix <- GetAssayData(seurat_obj, slot = "data")
+  
+  # Calculate mean expression for the given gene sets per cell
+  seurat_obj$Anabolic_Score <- colMeans(as.matrix(exp_matrix[genes_anabolic, , drop = FALSE]))
+  seurat_obj$Catabolic_Score <- colMeans(as.matrix(exp_matrix[genes_inflammatory, , drop = FALSE]))
+  
+  # Summarize metrics grouping by Drug and Dose
+  plot_data <- seurat_obj@meta.data %>%
+    group_by(drug_name, dose, drug_condition) %>%
+    summarise(
+      mean_ana  = mean(Anabolic_Score),
+      se_ana    = sd(Anabolic_Score) / sqrt(n()),
+      mean_cata = mean(Catabolic_Score),
+      se_cata   = sd(Catabolic_Score) / sqrt(n()),
+      .groups   = 'drop'
+    ) %>%
+    mutate(
+      AC_Ratio = mean_ana / mean_cata
+    )
+  
+  # 2. Format Data & Identify Top/Bottom Hits for Labels
+  top_hits    <- plot_data %>% top_n(5, AC_Ratio) %>% pull(drug_condition)
+  bottom_hits <- plot_data %>% top_n(5, -AC_Ratio) %>% pull(drug_condition)
+  controls    <- grep("control|inflammatory", plot_data$drug_condition, 
+                      value = TRUE, ignore.case = TRUE)
+  
+  plot_data <- plot_data %>%
+    mutate(
+      Label_Text = ifelse(drug_condition %in% c(top_hits, bottom_hits, controls), 
+                          drug_name, NA),
+      dose_clean = ifelse(is.na(dose) | drug_condition %in% controls, 
+                          "Ref", as.character(dose)),
+      dose_factor = factor(dose_clean, levels = c("0.1", "10", "Ref")) 
+    )  
+  
+  # 3. Define Colors
+  npg_cols <- pal_npg("nrc")(10)
+  npg_red  <- npg_cols[1]  
+  npg_blue <- npg_cols[4]  
+  
+  # 4. Generate Plot
+  p <- ggplot(plot_data, aes(x = mean_cata, y = mean_ana)) +
+    geom_errorbar(aes(ymin = mean_ana - se_ana, ymax = mean_ana + se_ana), 
+                  color = "grey80", width = 0) +
+    geom_errorbarh(aes(xmin = mean_cata - se_cata, xmax = mean_cata + se_cata), 
+                   color = "grey80", height = 0) +
+    geom_vline(xintercept = mean(range(plot_data$mean_cata)), 
+               linetype = "dotted", color = "grey60") +
+    geom_hline(yintercept = mean(range(plot_data$mean_ana)), 
+               linetype = "dotted", color = "grey60") +
+    geom_line(aes(group = drug_name), color = "grey60", 
+              linewidth = 0.5, alpha = 0.6) +
+    geom_point(aes(fill = AC_Ratio, shape = dose_factor), 
+               size = 5, alpha = 1, color = "black") +
+    scale_shape_manual(
+      name = "Condition",
+      values = c("0.1" = 21, "10" = 23, "Ref" = 22), 
+      labels = c("Low (0.1 uM)", "High (10 uM)", "Control")
+    ) +
+    scale_fill_gradient2(
+      name = "A/C Ratio", low = npg_blue, high = npg_red, mid = "grey90", 
+      midpoint = median(plot_data$AC_Ratio)
+    ) +
+    geom_text_repel(aes(label = Label_Text), size = 3.5, fontface = "bold",
+                    box.padding = 0.6, max.overlaps = 50, min.segment.length = 0) + 
+    theme_bw() +
+    labs(
+      x = "Catabolic gene sum (a.u.)", y = "Anabolic gene sum (a.u.)"
+    ) +
+    theme(
+      panel.grid.minor = element_blank(), axis.title = element_text(face = "bold"),
+      legend.position = "right", legend.background = element_rect(fill = "white", color = "grey90")
+    )
+  
+  return(p)
+}
+
+
+
 
 
 
