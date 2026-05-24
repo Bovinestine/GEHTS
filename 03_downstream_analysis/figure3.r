@@ -1,13 +1,8 @@
 # GE-HTS project pipeline for in situ sequencing data analysis
 # author: Nathan Wooseok Lee
 # Date of start: 241224
-# Date of update: 250711, 250827 (wide gene expression), 251223 (gene group)
+# Date of update: 250711, 250827 (wide gene expression), 251223 (gene group), 260524 (revise)
 # env: conda activate seurat4 / issr
-
-# Gene categroy
-anabolic <- c('Acan','Sox9','Col2a1','Matn1','Matn3','Ucma','Ccnd3','Gadd45g','Pth1r','Gm26633','Col27a1')
-inflammatory <- c('Mmp3','Mmp13','Il6', 'Il17b','Adamts5','Igfbp3','Ccl2','Cxcl5','Cxcl1','Fosl2','Tlr2','Tnfrsf1b')
-housekeeping <- c('Hprt','Actb','Gapdh','B2m','Ubc','Ppia','Rpl23')
 
 ### Figure 3b (GEheatmap)
 # ==============================================================================
@@ -26,14 +21,9 @@ suppressPackageStartupMessages({
 # ------------------------------------------------------------------------------
 # 1. Define Gene Categories
 # ------------------------------------------------------------------------------
-genes_anabolic <- c('Acan', 'Sox9', 'Col2a1', 'Matn1', 'Matn3', 'Ucma', 
-                    'Ccnd3', 'Gadd45g', 'Pth1r', 'Gm26633', 'Col27a1')
-
-genes_inflammatory <- c('Mmp3', 'Mmp13', 'Il6', 'Il17b', 'Adamts5', 'Igfbp3', 
-                        'Ccl2', 'Cxcl5', 'Cxcl1', 'Fosl2', 'Tlr2', 'Tnfrsf1b')
-
-genes_housekeeping <- c('Hprt', 'Actb', 'Gapdh', 'B2m', 'Ubc', 'Ppia', 'Rpl23')
-
+anabolic <- c('Acan','Sox9','Col2a1','Matn1','Matn3','Ucma','Ccnd3','Gadd45g','Pth1r','Gm26633','Col27a1')
+inflammatory <- c('Mmp3','Mmp13','Il6', 'Il17b','Adamts5','Igfbp3','Ccl2','Cxcl5','Cxcl1','Fosl2','Tlr2','Tnfrsf1b')
+housekeeping <- c('Hprt','Actb','Gapdh','B2m','Ubc','Ppia','Rpl23')
 # ------------------------------------------------------------------------------
 # 2. Main Heatmap Function
 # ------------------------------------------------------------------------------
@@ -43,15 +33,12 @@ genes_housekeeping <- c('Hprt', 'Actb', 'Gapdh', 'B2m', 'Ubc', 'Ppia', 'Rpl23')
 #' Extracts assay data from a Seurat object, filters genes by expression quantiles,
 #' groups cells by specified metadata, and generates an annotated pheatmap using 
 #' publication-ready ggsci color palettes.
-#'
 #' @param seurat_object A processed Seurat object.
 #' @param upper_threshold Upper quantile limit for filtering genes (default: 0).
 #' @param bottom_threshold Lower quantile limit for filtering genes (default: 1).
 #' @param assay Name of the assay to pull data from (default: 'SCT').
-#' @param slot Name of the slot to pull data from (default: 'counts').
 #' @param primary_metadata Column name in meta.data for primary grouping (e.g., 'dose').
 #' @param secondary_metadata Column name in meta.data for secondary grouping (e.g., 'drug_name').
-#' @param log1p Logical; whether to apply log1p transformation to the data (default: TRUE).
 #'
 #' @return The heatmap plot.
 #' @export
@@ -59,16 +46,16 @@ create_heatmap_by_expression_ps <- function(seurat_object,
                                             upper_threshold = 0, 
                                             bottom_threshold = 1, 
                                             assay = 'SCT', 
-                                            slot = 'counts', 
                                             primary_metadata = 'dose', 
-                                            secondary_metadata = 'drug_name', 
-                                            log1p = TRUE) {
+                                            secondary_metadata = 'drug_name') {
   
-  # --- Step 1: Extract and Filter Expression Data ---
-  expression_data <- GetAssayData(seurat_object, assay = assay, slot = slot)
+  # --- Step 1: Extract COUNTS for Sorting & Filtering ---
+  # We MUST use counts here because Pearson residuals (scale.data) have a mean 
+  # of ~0, which would break the absolute expression quantile filtering.
+  count_data <- GetAssayData(seurat_object, assay = assay, slot = 'counts')
   
-  expression_data <- expression_data[, colSums(is.finite(expression_data)) > 0]
-  average_expression <- rowMeans(expression_data, na.rm = TRUE)
+  count_data <- count_data[, colSums(is.finite(count_data)) > 0]
+  average_expression <- rowMeans(count_data, na.rm = TRUE)
   
   q_bottom <- quantile(average_expression, 1 - bottom_threshold)
   q_top    <- quantile(average_expression, 1 - upper_threshold)
@@ -76,9 +63,9 @@ create_heatmap_by_expression_ps <- function(seurat_object,
                                                average_expression <= q_top])
   
   # --- Step 2: Categorize and Sort Genes ---
-  selected_anabolic <- intersect(selected_genes, genes_anabolic)
-  selected_inflam   <- intersect(selected_genes, genes_inflammatory)
-  selected_housek   <- intersect(selected_genes, genes_housekeeping)
+  selected_anabolic <- intersect(selected_genes, anabolic)
+  selected_inflam   <- intersect(selected_genes, inflammatory)
+  selected_housek   <- intersect(selected_genes, housekeeping)
   
   sorted_selected_genes <- c(
     selected_anabolic[order(average_expression[selected_anabolic], decreasing = TRUE)],
@@ -95,17 +82,38 @@ create_heatmap_by_expression_ps <- function(seurat_object,
   )
   
   cell_scores <- cell_scores %>% arrange(primary, secondary)
-  data_for_heatmap <- expression_data[sorted_selected_genes, cell_scores$cell_name]
   
-  if (log1p) {
-    data_for_heatmap <- log1p(data_for_heatmap)
+  # --- NEW LOGIC: Extract SCTransform Residuals for Plotting ---
+  scale_data <- GetAssayData(seurat_object, assay = assay, slot = 'scale.data')
+  
+  # Safety check: SCTransform by default only stores residuals for highly variable genes.
+  # We must intersect to drop any genes that lack computed residuals.
+  available_genes <- intersect(sorted_selected_genes, rownames(scale_data))
+  
+  if (length(available_genes) < length(sorted_selected_genes)) {
+    missing_genes <- setdiff(sorted_selected_genes, available_genes)
+    warning(paste("The following genes are missing from scale.data and will be skipped:", 
+                  paste(missing_genes, collapse = ", ")))
   }
   
+  data_for_heatmap <- as.matrix(scale_data[available_genes, cell_scores$cell_name])
+  
+  # We NO LONGER run t(scale(t())) or log1p() because Pearson residuals 
+  # are already centered, regularized, and normalized!
+  
+  # Handle potential NaNs 
+  data_for_heatmap[is.na(data_for_heatmap)] <- 0
+  
+  # Cap extreme residuals to prevent outliers from washing out the color scale
+  data_for_heatmap[data_for_heatmap > 3] <- 3
+  data_for_heatmap[data_for_heatmap < -3] <- -3
+  
   # --- Step 4: Configure Visuals & Annotations ---
-  # Main heatmap body color gradient
-  data_range <- range(data_for_heatmap)
-  breaks <- seq(data_range[1], data_range[2], length.out = 101)
-  color_palette <- colorRampPalette(c("navy", "white", "firebrick3"))(length(breaks) - 1)
+  
+  # Create perfectly symmetric breaks around 0 for the diverging palette
+  max_val <- max(abs(data_for_heatmap), na.rm = TRUE)
+  breaks <- seq(-max_val, max_val, length.out = 101)
+  color_palette <- colorRampPalette(c("navy", "white", "firebrick3"))(100)
   
   # Column (Cell) Annotations
   annotation_col <- data.frame(
@@ -114,22 +122,24 @@ create_heatmap_by_expression_ps <- function(seurat_object,
   )
   rownames(annotation_col) <- cell_scores$cell_name
   
+  # Re-calculate lengths for annotations in case some genes were skipped
+  final_anabolic <- intersect(available_genes, selected_anabolic)
+  final_inflam   <- intersect(available_genes, selected_inflam)
+  final_housek   <- intersect(available_genes, selected_housek)
+  
   # Row (Gene) Annotations
   annotation_row <- data.frame(
     Gene_Type = factor(rep(c("Anabolic", "Catabolic", "Housekeeping"), 
-                           c(length(selected_anabolic), length(selected_inflam), length(selected_housek))),
+                           c(length(final_anabolic), length(final_inflam), length(final_housek))),
                        levels = c("Anabolic", "Catabolic", "Housekeeping"))
   )
-  rownames(annotation_row) <- sorted_selected_genes
+  rownames(annotation_row) <- available_genes
   
-  # --- NEW: ggsci Color Palettes for Annotations ---
-  
-  # Interpolate JCO palette for primary metadata (e.g., dose)
+  # ggsci Color Palettes for Annotations
   n_primary <- length(unique(cell_scores$primary))
   primary_colors <- colorRampPalette(pal_jco()(10))(n_primary)
   names(primary_colors) <- unique(cell_scores$primary)
   
-  # Interpolate NPG palette for secondary metadata (e.g., the 13 drug names)
   n_secondary <- length(unique(cell_scores$secondary))
   secondary_colors <- colorRampPalette(pal_npg("nrc")(10))(n_secondary)
   names(secondary_colors) <- unique(cell_scores$secondary)
@@ -140,11 +150,11 @@ create_heatmap_by_expression_ps <- function(seurat_object,
     Secondary = secondary_colors
   )
   
-  gap_row_positions <- c(length(selected_anabolic), 
-                         length(selected_anabolic) + length(selected_inflam))
+  gap_row_positions <- c(length(final_anabolic), 
+                         length(final_anabolic) + length(final_inflam))
   
   # --- Step 5: Generate Plot ---
-
+  
   p <- pheatmap::pheatmap(
     mat               = data_for_heatmap,
     cluster_rows      = FALSE, 
@@ -156,15 +166,16 @@ create_heatmap_by_expression_ps <- function(seurat_object,
     annotation_colors = ann_colors,
     color             = color_palette,
     breaks            = breaks,
-    main              = "Zoomed in Expressed Genes",
+    main              = "SCTransform Residuals",
     gaps_row          = gap_row_positions
   )
-
+  
   return(p)
 }
 
 # Exceution
 fig_3b <- create_heatmap_by_expression_ps(sin.sct) 
+ggsave("./Figure3b_heatmap_zscore.pdf", plot = fig_3b, width =6, height = 5, units = "in", dpi = 300)
 
 # ==============================================================================
 # Script Name: figure3c_main_umap.R
@@ -335,113 +346,4 @@ plot_highlighted_umaps(
   pdf_height = 6,
   output_pdf = "./figures/figure3/umap_single10noHarmonyPamapimodXav.pdf"
 )
-
-# ==============================================================================
-# Script Name: phenotypic_screening.R
-# Description: Functions to generate a 2D phenotypic screening plot (Figure 3e).
-# ==============================================================================
-
-suppressPackageStartupMessages({
-  library(Seurat)
-  library(dplyr)
-  library(ggplot2)
-  library(ggrepel)
-  library(ggsci)
-})
-
-#' Generate and Save Phenotypic Screening Plot
-#' 
-#' @param seurat_obj A merged Seurat object with 'drug_name', 'dose', and 'drug_condition' in meta.data
-#' @param genes_anabolic Vector of anabolic genes
-#' @param genes_inflammatory Vector of inflammatory/catabolic genes
-#' @return The ggplot object
-plot_phenotypic_screening <- function(
-    seurat_obj, 
-    genes_anabolic, 
-    genes_inflammatory) {
-    
-  # 1. Calculate coordinates and ratios
-  DefaultAssay(seurat_obj) <- "SCT"
-  exp_matrix <- GetAssayData(seurat_obj, slot = "data")
-  
-  # Calculate mean expression for the given gene sets per cell
-  seurat_obj$Anabolic_Score <- colMeans(as.matrix(exp_matrix[genes_anabolic, , drop = FALSE]))
-  seurat_obj$Catabolic_Score <- colMeans(as.matrix(exp_matrix[genes_inflammatory, , drop = FALSE]))
-  
-  # Summarize metrics grouping by Drug and Dose
-  plot_data <- seurat_obj@meta.data %>%
-    group_by(drug_name, dose, drug_condition) %>%
-    summarise(
-      mean_ana  = mean(Anabolic_Score),
-      se_ana    = sd(Anabolic_Score) / sqrt(n()),
-      mean_cata = mean(Catabolic_Score),
-      se_cata   = sd(Catabolic_Score) / sqrt(n()),
-      .groups   = 'drop'
-    ) %>%
-    mutate(
-      AC_Ratio = mean_ana / mean_cata
-    )
-  
-  # 2. Format Data & Identify Top/Bottom Hits for Labels
-  top_hits    <- plot_data %>% top_n(5, AC_Ratio) %>% pull(drug_condition)
-  bottom_hits <- plot_data %>% top_n(5, -AC_Ratio) %>% pull(drug_condition)
-  controls    <- grep("control|inflammatory", plot_data$drug_condition, 
-                      value = TRUE, ignore.case = TRUE)
-  
-  plot_data <- plot_data %>%
-    mutate(
-      Label_Text = ifelse(drug_condition %in% c(top_hits, bottom_hits, controls), 
-                          drug_name, NA),
-      dose_clean = ifelse(is.na(dose) | drug_condition %in% controls, 
-                          "Ref", as.character(dose)),
-      dose_factor = factor(dose_clean, levels = c("0.1", "10", "Ref")) 
-    )  
-  
-  # 3. Define Colors
-  npg_cols <- pal_npg("nrc")(10)
-  npg_red  <- npg_cols[1]  
-  npg_blue <- npg_cols[4]  
-  
-  # 4. Generate Plot
-  p <- ggplot(plot_data, aes(x = mean_cata, y = mean_ana)) +
-    geom_errorbar(aes(ymin = mean_ana - se_ana, ymax = mean_ana + se_ana), 
-                  color = "grey80", width = 0) +
-    geom_errorbarh(aes(xmin = mean_cata - se_cata, xmax = mean_cata + se_cata), 
-                   color = "grey80", height = 0) +
-    geom_vline(xintercept = mean(range(plot_data$mean_cata)), 
-               linetype = "dotted", color = "grey60") +
-    geom_hline(yintercept = mean(range(plot_data$mean_ana)), 
-               linetype = "dotted", color = "grey60") +
-    geom_line(aes(group = drug_name), color = "grey60", 
-              linewidth = 0.5, alpha = 0.6) +
-    geom_point(aes(fill = AC_Ratio, shape = dose_factor), 
-               size = 5, alpha = 1, color = "black") +
-    scale_shape_manual(
-      name = "Condition",
-      values = c("0.1" = 21, "10" = 23, "Ref" = 22), 
-      labels = c("Low (0.1 uM)", "High (10 uM)", "Control")
-    ) +
-    scale_fill_gradient2(
-      name = "A/C Ratio", low = npg_blue, high = npg_red, mid = "grey90", 
-      midpoint = median(plot_data$AC_Ratio)
-    ) +
-    geom_text_repel(aes(label = Label_Text), size = 3.5, fontface = "bold",
-                    box.padding = 0.6, max.overlaps = 50, min.segment.length = 0) + 
-    theme_bw() +
-    labs(
-      x = "Catabolic gene sum (a.u.)", y = "Anabolic gene sum (a.u.)"
-    ) +
-    theme(
-      panel.grid.minor = element_blank(), axis.title = element_text(face = "bold"),
-      legend.position = "right", legend.background = element_rect(fill = "white", color = "grey90")
-    )
-  
-  return(p)
-}
-
-
-
-
-
-
 

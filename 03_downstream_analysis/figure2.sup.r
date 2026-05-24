@@ -9,80 +9,45 @@ library(scales)  # For gradient color palette
 library(dplyr)
 library(patchwork)
 library(cowplot)
-# Gene categroy # IL17b is relocated to inflammatory from anabolic
+
+# Gene categroy 
 anabolic <- c('Acan','Sox9','Col2a1','Matn1','Matn3','Ucma','Ccnd3','Gadd45g','Pth1r','Gm26633','Col27a1')
 inflammatory <- c('Mmp3','Mmp13','Il6','Adamts5','Igfbp3','Ccl2','Cxcl5','Cxcl1','Fosl2','Tlr2','Tnfrsf1b', 'Il17b')
 housekeeping <- c('Hprt','Actb','Gapdh','B2m','Ubc','Ppia','Rpl23')
 gene_list <- c(anabolic, inflammatory, housekeeping)
 
-mac69.sct <- subset(mac.SCT, subset = file %in% c('230608','230914'))
-mac69 <- subset(mac, subset = file %in% c('230608','230914'))
-
-# batch QC test
-# Visualize nCount_RNA distribution by batch ("file")
-VlnPlot(cmb.sct, 
-        features = "nCount_SCT", 
-        group.by = "file", 
-        pt.size = 0.1, # Adjusts the size of the dots
-        log = TRUE) +  # Optional: Log scale helps if there are huge outliers
-  NoLegend() +
-  ggtitle("Distribution of RNA Counts per Batch")
-
-RidgePlot(mac.sct, 
-          features = "nCount_SCT", 
-          group.by = "file") +
-  ggtitle("nCount_RNA Density by Batch")
-
-# Calculate stats for nCount_RNA grouped by "file"
-batch_stats <- mac.SCT@meta.data %>%
-  group_by(file) %>%
-  summarise(
-    n_Cells = n(),
-    Mean_nCount = mean(nCount_RNA),
-    Median_nCount = median(nCount_RNA),
-    SD_nCount = sd(nCount_RNA),
-    Min_nCount = min(nCount_RNA),
-    Max_nCount = max(nCount_RNA)
-  )
-
-# View the table
-print(batch_stats)
-write.csv(batch_stats, file="./figures/supple/batch_statistics.csv", row.names=FALSE)
-
-# 1. Calculate the % of cells detecting each HK gene per batch
-hk_detection_stats <- mac.SCT@meta.data %>%
-  bind_cols(t(as.matrix(mac.SCT@assays$SCT@counts[housekeeping, ]))) %>%
-  group_by(file) %>%
-  summarise(
-    # Calculate % of cells with count > 0 for key genes
-    Ubc_Detection_Pct = mean(Ubc > 0) * 100,
-    Actb_Detection_Pct = mean(Actb > 0) * 100,
-    Gapdh_Detection_Pct = mean(Gapdh > 0) * 100,
-    
-    # Calculate Mean Expression levels
-    Mean_Ubc = mean(Ubc),
-    Mean_Actb = mean(Actb),
-    Mean_Gapdh = mean(Gapdh)
-  )
-
-print(hk_detection_stats)
-write.csv(hk_detection_stats, file="./figures/supple/hk_detection_statistics.csv", row.names=FALSE)
 
 
-### Supplementary Figure 5 (Figure 2d (grid of gene expression box plots))
-# anabolic
-draw_boxplots_for_genes_with_common_legend(mac69.sct, genes = anabolic,
-                        pdf_file = "./figures/figure.sup/S.fig.5_boxplots_ana.pdf",
-                        pdf_width = 5, pdf_height = 3, base_font_size = 6, legend_gap = 0.03)
-# catabolic
-draw_boxplots_for_genes_with_common_legend(mac69.sct, genes = inflammatory,
-                        pdf_file = "./figures/figure.sup/S.fig.5_boxplots_cata.pdf",
-                        pdf_width = 5, pdf_height = 3, base_font_size = 6, legend_gap = 0.03)
-# housekeeping
-draw_boxplots_for_genes_with_common_legend(mac69.sct, genes = housekeeping,
-                        pdf_file = "./figures/figure.sup/S.fig.5_boxplots_hk.pdf",
-                        pdf_width = 3.5, pdf_height = 3, base_font_size = 6, legend_gap = 0.03)
+### extended data Figure 6 (grid of gene expression box plots)
+sfig_boxplot <- draw_boxplots_for_genes_with_common_legend(mac.sct, genes = gene_list, nrow=4,
+                        base_font_size = 6, legend_gap = 0.03)
+ggsave("./S.fig.6_boxplots_allgenes.pdf", plot=sfig_boxplot, width = 5, height = 5, units = "in", dpi = 300)
 
+library(Seurat)
+library(ggplot2)
+library(dplyr)
+library(gridExtra)
+library(cowplot)
+library(ggsignif)
+
+#' Generate Publication-Ready Faceted Boxplots with Common Legend
+#'
+#' @param seurat_object A Seurat object containing single-cell data.
+#' @param genes Character vector of genes to plot.
+#' @param datatype Character. The data slot to use. Default is 'counts'.
+#' @param control_label Character. Metadata string for the healthy baseline.
+#' @param treatment_label Character. Metadata string for the disease baseline.
+#' @param extra_label1 Character. Metadata string for treatment 1.
+#' @param extra_label2 Character. Metadata string for treatment 2.
+#' @param color_palette Named vector of hex colors for the conditions.
+#' @param nrow Number of rows of genes in grid
+#' @param base_font_size Base font size for ggplot theme.
+#' @param line_thickness Thickness of axis lines and boxplot borders.
+#' @param legend_gap Spacing ratio for the top legend.
+#' @param y_title Label for the shared Y-axis.
+#'
+#' @return A combined cowplot object.
+#' @export
 draw_boxplots_for_genes_with_common_legend <- function(seurat_object,
                                                        genes,
                                                        datatype = 'counts',
@@ -90,220 +55,138 @@ draw_boxplots_for_genes_with_common_legend <- function(seurat_object,
                                                        treatment_label = "inflammatory",
                                                        extra_label1 = "label3",
                                                        extra_label2 = "label4",
+                                                       color_palette = NULL,
+                                                       nrow = 5,
                                                        pdf_file = "./figures/figure2/boxplots.pdf",
                                                        pdf_width = 6,
                                                        pdf_height = 6,
-                                                       base_font_size = 5,
+                                                       base_font_size = 6,
                                                        line_thickness = 0.5,
                                                        legend_gap = 0.05,
                                                        y_title = "Normalized gene expression (a.u)") {
-  library(Seurat)
-  library(ggplot2)
-  library(dplyr)
-  library(gridExtra)
-  library(cowplot)
-  library(ggsignif)  # for p-value annotation
   
+  # 1. Setup Default Colors if none provided (NPG Palette)
+  if (is.null(color_palette)) {
+    color_palette <- setNames(
+      c("#4DBBD559", "#E64B3599", "#A6CEE3", "#1f78b4"), 
+      c("Basal", "IL-1β", extra_label1, extra_label2)
+    )
+  }
+  
+  # 2. Extract and Format Metadata
   meta <- seurat_object@meta.data
   valid_conditions <- c(control_label, treatment_label, extra_label1, extra_label2)
   cells_to_use <- rownames(meta)[ meta$drug_condition %in% valid_conditions ]
   
+  # Map conditions to clean labels and lock the factor levels
+  level_order <- c("Basal", "IL-1β", extra_label1, extra_label2)
+  
   meta_subset <- meta[cells_to_use, ] %>%
     mutate(ConditionLabel = case_when(
-      drug_condition == control_label ~ "Control",
-      drug_condition == treatment_label ~ "IL-1B",
+      drug_condition == control_label ~ "Basal",
+      drug_condition == treatment_label ~ "IL-1β",
       drug_condition == extra_label1 ~ extra_label1,
       drug_condition == extra_label2 ~ extra_label2,
-      TRUE ~ drug_condition
-    ))
+      TRUE ~ as.character(drug_condition)
+    )) %>%
+    mutate(ConditionLabel = factor(ConditionLabel, levels = level_order))
   
   plot_list <- list()
   
+  # 3. Generate Individual Gene Plots
   for (gene in genes) {
     expr <- as.vector(GetAssayData(seurat_object, slot = datatype)[gene, cells_to_use, drop = TRUE])
     df <- data.frame(Expression = expr,
                      Condition = meta_subset$ConditionLabel)
     
-    # Get all pairwise comparisons (for 4 groups => 6 pairs)
-    groups <- unique(df$Condition)
-    comparisons_list <- combn(groups, 2, simplify = FALSE)
-    
-    # Estimate y-position for significance annotation
-    ymax <- boxplot.stats(df$Expression)$stats[5]
+    # Calculate a safe y-max for significance bars based on absolute max value
+    ymax <- max(df$Expression, na.rm = TRUE)
+    if (is.infinite(ymax) || is.na(ymax) || ymax == 0) ymax <- 1
+    step_size <- ymax * 0.08 # 8% step increase between brackets
     
     p_gene <- ggplot(df, aes(x = Condition, y = Expression, fill = Condition)) +
-      geom_boxplot(outlier.shape = NA) +
-      geom_signif(comparisons = comparisons_list,
-                  map_signif_level = TRUE,
-                  y_position = ymax * (1 + 0.15 * seq_along(comparisons_list)),
-                  textsize = base_font_size - 1,
-                  tip_length = 0.01,
-                  step_increase = 0.05) +
+      geom_boxplot(outlier.shape = NA, linewidth = line_thickness, alpha = 0.85) +
+      scale_fill_manual(values = color_palette) +
       labs(title = gene) +
       theme_classic() +
       theme(text = element_text(size = base_font_size),
-            axis.line = element_line(linewidth = line_thickness),
+            axis.line = element_line(linewidth = line_thickness, color = "black"),
             axis.text.x = element_blank(),
             axis.ticks.x = element_blank(),
-            axis.text.y = element_text(size = base_font_size),
+            axis.text.y = element_text(size = base_font_size, color = "black"),
             axis.title.x = element_blank(),
             axis.title.y = element_blank(),
-            plot.title = element_text(face = "plain", hjust = 0.5, size = base_font_size),
-            legend.position = "none")
+            plot.title = element_text(face = "bold.italic", hjust = 0.5, size = base_font_size + 2),
+            legend.position = "none",
+            plot.margin = ggplot2::margin(t = 10, r = 5, b = 2, l = 5))
+
+    # Only test groups that have at least 2 valid observations
+    group_counts <- table(df$Condition[!is.na(df$Expression)])
+    valid_groups <- names(group_counts)[group_counts >= 2]
+    
+    if (length(valid_groups) >= 2) {
+      comparisons_list <- combn(valid_groups, 2, simplify = FALSE)
+      
+      p_gene <- p_gene + geom_signif(
+        comparisons = comparisons_list,
+        map_signif_level = TRUE,
+        y_position = ymax + (step_size * seq_along(comparisons_list)),
+        textsize = base_font_size * 0.35,
+        tip_length = 0.01,
+        size = 0.3,  # --- BUG FIX: Reverted from linewidth to size ---
+        vjust = 0.5
+      )
+
+      # Dynamically expand Y-axis limit so top significance bars aren't cut off
+      top_bracket_y <- ymax + (step_size * (length(comparisons_list) + 1))
+      p_gene <- p_gene + coord_cartesian(ylim = c(0, top_bracket_y))
+    } else {
+      # If not enough groups for a statistical test, just plot the boxes
+      p_gene <- p_gene + coord_cartesian(ylim = c(0, ymax * 1.1))
+    }
     
     plot_list[[gene]] <- p_gene
   }
-  
-  dummy_df <- data.frame(Condition = factor(c("Control", "IL-1B", extra_label1, extra_label2),
-                                            levels = c("Control", "IL-1B", extra_label1, extra_label2)),
+
+  # 4. Generate Common Legend
+  dummy_df <- data.frame(Condition = factor(level_order, levels = level_order),
                          Expression = rep(0.5, 4))
   
   dummy_plot <- ggplot(dummy_df, aes(x = Condition, y = Expression, fill = Condition)) +
     geom_boxplot() +
-    labs(fill = 'Condition') +
+    scale_fill_manual(values = color_palette) +
     theme_classic() +
     theme(legend.position = "top",
-          legend.text = element_text(size = base_font_size),
-          legend.title = element_text(size = base_font_size),
-          legend.margin = margin(0,0,0,0))
+          legend.text = element_text(size = base_font_size + 2, face = "bold"),
+          legend.title = element_blank(),
+          legend.key.size = unit(0.4, "cm"),
+          legend.margin = ggplot2::margin(0,0,0,0))
   
+  # Helper to extract the legend grob
   get_legend <- function(myplot) {
     tmp <- ggplot_gtable(ggplot_build(myplot))
     leg <- which(sapply(tmp$grobs, function(x) x$name) == "guide-box")
     legend <- tmp$grobs[[leg]]
     return(legend)
   }
-  
   common_legend <- get_legend(dummy_plot)
   
+  # 5. Arrange the Grid
   n_genes <- length(genes)
-  ncol <- ceiling(n_genes / 2)
-  grid_plots <- arrangeGrob(grobs = plot_list, ncol = ncol, nrow = 2)
+  ncol <- ceiling(n_genes / nrow)
+  grid_plots <- arrangeGrob(grobs = plot_list, ncol = ncol, nrow = nrow)
   
   arranged_plots <- grid.arrange(common_legend, grid_plots,
                                  ncol = 1,
                                  heights = c(legend_gap, 1))
   
+  # 6. Final Assembly with Cowplot
   final_plot <- ggdraw() +
     draw_plot(arranged_plots, x = 0.05, y = 0, width = 0.95, height = 1) +
     draw_label(y_title, x = 0.02, y = 0.5,
-               angle = 90, vjust = 0.5, size = base_font_size)
-  
-  if (!is.null(pdf_file)) {
-    pdf(file = pdf_file, width = pdf_width, height = pdf_height)
-    print(final_plot)
-    dev.off()
-  }
+               angle = 90, vjust = 0.5, size = base_font_size + 2, fontface = "bold")
   
   return(final_plot)
-}
-
-# Anabolic and Catabolic gene sum bar plots
-sum_genes_and_plot(mac.sct, pdf_width = 3, pdf_height = 2.5, base_font_size = 7, pdf_file='./figures/figure2/figure2c_barplot.pdf')#251230
-
-# Function to calculate sum of gene counts per category for each cell and save plot as PDF
-sum_genes_and_plot <- function(seurat_object, 
-                               anabolic_genes = anabolic,
-                               inflammatory_genes = inflammatory, 
-                               control_label = "control",
-                               treatment_label = "inflammatory",
-                               pdf_file = "./figures/figure2/sum_genes_and_barplot.pdf",
-                               pdf_width = 4, 
-                               pdf_height = 6,
-                               base_font_size = 10,
-                               datatype = 'counts',
-                               common_x_label = "",
-                               common_y_label = "Sum of normalized gene counts",
-                               title1 = "Anabolic Gene",
-                               title2 = "Catabolic Gene") {
-  
-  # Add computed sums to the Seurat object's metadata
-  seurat_object[["anabolic_sum"]] <- Matrix::colSums(GetAssayData(seurat_object, slot = datatype)[anabolic_genes, , drop = FALSE])
-  seurat_object[["inflammatory_sum"]] <- Matrix::colSums(GetAssayData(seurat_object, slot = datatype)[inflammatory_genes, , drop = FALSE])
-  
-  # Subset cells by condition (using the given metadata field)
-  control_cells <- subset(seurat_object, subset = drug_condition == control_label)
-  treatment_cells <- subset(seurat_object, subset = drug_condition == treatment_label)
-  
-  # Change the treatment label if any
-  if (treatment_label == 'inflammatory'){
-    treatment_label <- "IL-1β"
-  }
-
-  # Prepare data frames for each gene group:
-  anabolic_df <- data.frame(
-    condition = rep(c(control_label, treatment_label),
-                    times = c(nrow(control_cells@meta.data), nrow(treatment_cells@meta.data))),
-    sum = c(control_cells@meta.data$anabolic_sum, treatment_cells@meta.data$anabolic_sum)
-  )
-  
-  inflammatory_df <- data.frame(
-    condition = rep(c(control_label, treatment_label),
-                    times = c(nrow(control_cells@meta.data), nrow(treatment_cells@meta.data))),
-    sum = c(control_cells@meta.data$inflammatory_sum, treatment_cells@meta.data$inflammatory_sum)
-  )
-  
-  # Determine maximum y values for proper label placement
-  # anabolic_ymax <- max(anabolic_df$sum, na.rm = TRUE)
-  # inflammatory_ymax <- max(inflammatory_df$sum, na.rm = TRUE)
-  anabolic_ymax <- boxplot.stats(anabolic_df$sum)$stats[5]
-  inflammatory_ymax <- boxplot.stats(inflammatory_df$sum)$stats[5]
-
-  
-  # Create the anabolic gene plot (remove axis titles so common labels can be added later)
-  p_anabolic <- ggplot(anabolic_df, aes(x = condition, y = sum, fill = condition)) +
-    geom_boxplot(outliers = FALSE) +
-    #stat_compare_means(aes(group = condition), label = "p.format", 
-    #                   label.y = anabolic_ymax * 1.05, size = base_font_size * 0.6) +
-    stat_compare_means(comparisons=list(c(control_label,treatment_label)), label = 'p.signif', 
-                        label.y = anabolic_ymax * 1.05, size = base_font_size) +
-    labs(title = title1) +
-    theme_classic() +
-    theme(text = element_text(size = base_font_size),
-          # legend.position = "top",
-          axis.title.x = element_blank(),
-          axis.title.y = element_blank(),
-          plot.title = element_text(face = "plain", hjust = 0.5, size = base_font_size + 2))
-  
-  # Create the inflammatory gene plot (also remove individual axis titles)
-  p_inflammatory <- ggplot(inflammatory_df, aes(x = condition, y = sum, fill = condition)) +
-    geom_boxplot(outliers = FALSE) +
-    #stat_compare_means(aes(group = condition), label = "p.format", 
-    #                   label.y = inflammatory_ymax * 1.05, size = base_font_size * 0.6) +
-    stat_compare_means(comparisons=list(c(control_label, treatment_label)), label = 'p.signif', 
-                        label.y = inflammatory_ymax * 1.05, size = base_font_size) +
-    labs(title = title2) +
-    theme_classic() +
-    theme(text = element_text(size = base_font_size),
-          # legend.position = "top",
-          axis.title.x = element_blank(),
-          axis.title.y = element_blank(),
-          plot.title = element_text(face = "plain", hjust = 0.5, size = base_font_size + 2))
-  
-  p_anabolic$layers[[2]]$aes_params$textsize <- base_font_size
-  p_inflammatory$layers[[2]]$aes_params$textsize <- base_font_size
-
-  # Combine the two plots side by side with a single (collected) legend at the top.
-  #combined_patch <- (p_anabolic + p_inflammatory + plot_layout(guides = "collect")) &
-  #  theme(legend.position = "top", legend.key.height = unit(0.3, "cm"),
-  #    legend.margin = margin(t = 2, b = 2))
-  combined_patch <- (p_anabolic + p_inflammatory + plot_layout(guides = "collect")) &
-    theme(legend.position = "none")
-  
-  
-  
-  # Now, add common x and y axis labels using cowplot. Note that you may need to adjust
-  # the x and y positions (here 0.5 and 0 for x label; 0 and 0.5 for y label) and vertical/horizontal justification.
-  final_plot <- ggdraw(combined_patch) +
-    draw_label(common_x_label, x = 0.5, y = 0, vjust = -1.2, size = base_font_size + 2) +
-    draw_label(common_y_label, x = 0, y = 0.5, angle = 90, vjust = 1.2, size = base_font_size + 2)
-  
-  # Save the final figure to a PDF file
-  pdf(file = pdf_file, width = pdf_width, height = pdf_height)
-  print(final_plot)
-  dev.off()
-  
-  invisible(final_plot)
 }
 
 
@@ -440,190 +323,3 @@ if (nrow(plot_data) > 0) {
 } else {
   stop("Error: plot_data is empty. Check 'well_no' format in your object.")
 }
-
-### Primary cell VS ATDC5 cell line Heatmap
-library(Seurat)
-library(pheatmap) # Note: pheatmap is standard for this specific call, though ComplexHeatmap::pheatmap works too.
-
-#' Plot CLR-Normalized Heatmap (Primary vs. ATDC5)
-#'
-#' Extracts raw counts for a specific gene panel from two Seurat objects, 
-#' calculates Centered Log-Ratio (CLR) normalization manually, and generates 
-#' an academic-grade annotated heatmap.
-#'
-#' @param seu_primary Seurat object for the Primary cells. Not normalized data
-#' @param seu_atdc5 Seurat object for the ATDC5 cells. Not normalized data
-#' @param genes_of_interest Character vector of genes to include in the heatmap.
-#' @param assay Character, the assay to pull data from (default: "RNA").
-#' @param layer Character, the layer/slot to pull raw counts from (default: "counts").
-#' @return A pheatmap object.
-#' @export
-plot_clr_heatmap <- function(seu_primary, seu_atdc5, genes_of_interest, 
-                             assay = "RNA", layer = "counts") {
-  
-  # ==============================================================================
-  # 1. DATA EXTRACTION & SAFETY CHECKS
-  # ==============================================================================
-  # Ensure genes exist in both objects to prevent out-of-bounds errors
-  valid_genes <- intersect(genes_of_interest, rownames(seu_primary[[assay]]))
-  valid_genes <- intersect(valid_genes, rownames(seu_atdc5[[assay]]))
-  
-  if (length(valid_genes) < length(genes_of_interest)) {
-    warning("Some genes were not found in the Seurat objects and were dropped.")
-  }
-  
-  # Extract raw counts
-  counts_primary <- GetAssayData(seu_primary, assay = assay, layer = layer)[valid_genes, , drop = FALSE]
-  counts_atdc5   <- GetAssayData(seu_atdc5, assay = assay, layer = layer)[valid_genes, , drop = FALSE]
-  
-  # ==============================================================================
-  # 2. CLR NORMALIZATION
-  # ==============================================================================
-  # Internal function to calculate Centered Log-Ratio (CLR)
-  clr_function <- function(x) {
-    # Add pseudocount of 1 to avoid log(0)
-    geo_mean <- exp(mean(log(x + 1)))
-    return(log((x + 1) / geo_mean))
-  }
-  
-  # Apply CLR to columns (individual cells)
-  norm_primary <- apply(counts_primary, 2, clr_function)
-  norm_atdc5   <- apply(counts_atdc5, 2, clr_function)
-  
-  # Combine matrices for plotting
-  norm_combined <- cbind(norm_primary, norm_atdc5)
-  
-  # ==============================================================================
-  # 3. ANNOTATIONS & PALETTES
-  # ==============================================================================
-  # Create annotation dataframe for the top color bar
-  annotation_df <- data.frame(
-    CellType = c(rep("Primary", ncol(norm_primary)), 
-                 rep("ATDC5", ncol(norm_atdc5)))
-  )
-  rownames(annotation_df) <- colnames(norm_combined)
-  
-  # Match NPG-inspired palette from previous figures for cohesion
-  ann_colors <- list(
-    CellType = c("Primary" = "#00A087",  # NPG Teal
-                 "ATDC5"   = "#F39B7F")  # NPG Muted Orange
-  )
-  
-  # ==============================================================================
-  # 4. GENERATE HEATMAP
-  # ==============================================================================
-  # Generate and return the heatmap
-  hm <- pheatmap(
-    mat = norm_combined,
-    
-    # Visuals: Blue-White-Red standard expression gradient
-    color = colorRampPalette(c("navy", "white", "firebrick3"))(100),
-    breaks = seq(-2, 2, length.out = 100), # Force scale bounds for CLR
-    
-    # Clustering
-    cluster_rows = TRUE,   # Group biologically similar genes
-    cluster_cols = FALSE,  # Keep Primary and ATDC5 as separate visual blocks
-    
-    # Annotations
-    annotation_col = annotation_df,
-    annotation_colors = ann_colors,
-    show_colnames = FALSE, # Hide individual cell barcodes
-    
-    # Labels & Formatting
-    main = paste0("CLR Relative Expression (Normalized to ", length(valid_genes), "-Gene Geometric Mean)"),
-    fontsize_row = 10,
-    fontface_row = "italic", # Standard nomenclature for gene symbols
-    angle_col = 45           # Angle column labels if they are ever turned on
-  )
-  
-  return(hm)
-}
-
-# ==============================================================================
-# EXAMPLE USAGE:
-# seu_atdc5 could be found in the GSE database 
-# my_heatmap <- plot_clr_heatmap(seu_primary, seu_atdc5, genes_of_interest)
-# ==============================================================================
-
-### Figure 2e Old (UMAP cluster heatmap)
-library(ggplot2)
-library(pheatmap)
-
-png("./figures/figure2/heatmap_body.png", width = 2000, height = 2000, res = 300) # High resolution
-pheatmap(
-  distance_matrix_m,
-  cluster_rows = FALSE,  # Disable dendrograms
-  cluster_cols = FALSE,  # Disable dendrograms
-  show_rownames = FALSE, # Remove row names
-  show_colnames = FALSE
-)
-dev.off()
-
-
-# Combine the PNG heatmap with vector annotations and dendrograms
-pdf("./figures/figure2/final_heatmap_combined.pdf", width = 4, height = 4)
-
-# Add the rasterized heatmap as the background
-grid::grid.raster(png::readPNG("heatmap_body.png"))
-
-# Add vector annotations and dendrograms
-pheatmap(
-  distance_matrix_m,
-  color = NA,  # Disable heatmap colors again
-  cluster_rows = TRUE,
-  cluster_cols = TRUE,
-  annotation_row = annotation_df,
-  annotation_col = annotation_df,
-  show_rownames = FALSE,
-  show_colnames = FALSE
-)
-
-# Close the PDF device
-dev.off()
-
-# Combine rasterized heatmap with labels (optional)
-pdf("./figures/figure2/final_heatmap.pdf", width = 4, height = 4)
-grid::grid.raster(png::readPNG("./figures/figure2/heatmap_rasterized.png"))
-# Add additional vector elements, e.g., annotations
-dev.off()
-
-# Define the function to generate Heatmap PDF
-generate_umap_heatmap_pdf <- function(umap_object, pdf_file = "umap_heatmap.pdf", 
-                                 pdf_width = 6, pdf_height = 6) {
-  # Step 1: Extract UMAP embeddings and metadata
-  umap_1data <- umap_object[["umap"]]@cell.embeddings
-  drug_conditions <- umap_object$drug_condition
-
-  # Ensure the order of drug_conditions matches the order of umap_1data
-  drug_conditions <- drug_conditions[rownames(umap_1data)]
-
-  # Create an annotation data frame for the drug_condition
-  annotation_df <- data.frame(DrugCondition = drug_conditions)
-
-  # Calculate distance matrix
-  distance_matrix <- dist(umap_1data)
-
-  # Convert to a matrix for heatmap
-  distance_matrix_m <- as.matrix(distance_matrix)
-
-  # Step 2: Define the color palette
-  color_palette <- colorRampPalette(colors = c("blue4", 'white', "red4"))(100)
-
-  # Step 3: Create and save the heatmap to a PDF file
-  pdf(pdf_file, width = pdf_width, height = pdf_height)
-  pheatmap(
-    distance_matrix_m, 
-    clustering_distance_rows = distance_matrix, 
-    clustering_distance_cols = distance_matrix,
-    show_rownames = FALSE, 
-    show_colnames = FALSE
-  )
-  dev.off()
-
-  # Return the PDF file path
-  return(pdf_file)
-}
-
-generate_umap_heatmap_pdf(umap_object = mac.sct.umap, pdf_file = "./figures/figure2/umap_heatmap.pdf", 
-                          pdf_width = 4, pdf_height = 4)
-

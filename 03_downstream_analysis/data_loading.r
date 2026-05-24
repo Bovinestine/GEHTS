@@ -47,11 +47,11 @@ load(paste0(dir_path, '/prediction/prob_cmb0.1_rf.Rdata'))
 # Prediction models 
 "Elastic Net", "Random Forest", "XGBoost", "SVR", "GPR"
 
-en_model <- readRDS("./Rdata/prediction/Elastic Net_model.rds")
-rf_model <- readRDS("./Rdata/prediction/Random_forest_model.rds")
-xgb_model <- readRDS("./Rdata/prediction/XGBoost_model.rds")
-svr_model <- readRDS("./Rdata/prediction/SVR_model.rds")
-gpr_model <- readRDS("./Rdata/prediction/GPR_model.rds")
+en_model <- readRDS("./Rdata/pub/prediction/Elastic Net_model.rds")
+rf_model <- readRDS("./Rdata/pub/prediction/Random_forest_model.rds")
+xgb_model <- readRDS("./Rdata/pub/prediction/XGBoost_model.rds")
+svr_model <- readRDS("./Rdata/pub/prediction/SVR_model.rds")
+gpr_model <- readRDS("./Rdata/pub/prediction/GPR_model.rds")
 
 # universal scale for radar chart
 load(paste0(dir_path, '/uni_scale.Rdata'))

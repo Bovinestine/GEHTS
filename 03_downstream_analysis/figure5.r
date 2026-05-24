@@ -1,6 +1,6 @@
 # Project name: GEHTS-chip
 # Author: Nathan Wooseok Lee
-# date: 260302
+# date: 260524
 
 anabolic <- c('Acan','Sox9','Col2a1','Matn1','Matn3','Ucma','Ccnd3','Gadd45g','Pth1r','Gm26633','Col27a1')
 inflammatory <- c('Mmp3','Mmp13','Il6', 'Il17b','Adamts5','Igfbp3','Ccl2','Cxcl5','Cxcl1','Fosl2','Tlr2','Tnfrsf1b')
@@ -121,6 +121,7 @@ plot_bliss_synergy <- function(cmb_rf, sng_rf, top_n = 5) {
     Synergy = synergy_score
   ) %>% 
     filter(!is.na(Synergy)) %>%
+    filter(drug1 != drug2) %>%
     # Group and average in case there are multiple technical replicates
     group_by(std_combi, drug1, drug2) %>%
     summarise(
@@ -379,7 +380,8 @@ ggsave("./figures/figure5/Figure5e_BiologicalAlignment.pdf", plot = fig5e_effica
 
 
 
-#' Figure 5f biological function heatmap
+
+#' Figure 5f biological function dot plot
 library(Seurat)
 library(ggplot2)
 library(dplyr)
@@ -387,23 +389,22 @@ library(tidyr)
 library(ggsci)
 library(scales) 
 
-#' Plot Compact Log2FC Heatmap for Efficacy and Safety
+#' Plot Compact Log2FC Dot Plot for Efficacy and Safety
 #'
 #' Dynamically computes 6 clinical GO modules and 3 core cellular state modules 
-#' using exact mean expression calculation (bypassing AddModuleScore artifacts). 
+#' using exact mean expression calculation. 
 #' Evaluates top combinations using Log2FC relative to the disease baseline. 
-#' Drops the reference column and uses vertical labels to optimize publication space.
+#' Maps dot color to Log2FC and dot size to the percentage of cells expressing the module.
 #' 
 #' @param seurat_obj A Seurat object containing an "SCT" assay.
 #' @param top5_combos A character vector of the top 5 combination names.
-#' @return A publication-ready ggplot2 heatmap object.
+#' @return A publication-ready ggplot2 dot plot object.
 #' @export
-plot_heatmap_log2fc_compact <- function(seurat_obj, top5_combos) {
+plot_dotplot_log2fc_compact <- function(seurat_obj, top5_combos) {
   
   # ====================================================================
   # 1. Define All 9 Module Gene Sets
   # ====================================================================
-  # The 6 Clinical GO Modules
   go_terms_genes <- list(
     GO_Score1 = c("Matn1", "Acan", "Sox9", "Col27a1"),
     GO_Score2 = c("Col2a1", "Acan", "Sox9"),
@@ -413,7 +414,6 @@ plot_heatmap_log2fc_compact <- function(seurat_obj, top5_combos) {
     GO_Score6 = c("Tlr2", "Ccl2", "Il17b", "Tnfrsf1b", "Cxcl1", "Il6", "Cxcl5", "Fosl2")
   )
   
-  # The 3 Core Cellular State Modules
   state_genes <- list(
     State_Viability = c('Hprt', 'Actb', 'Gapdh', 'B2m', 'Ubc', 'Ppia', 'Rpl23'),
     State_Stress    = c('Gadd45g', 'Igfbp3'),
@@ -423,10 +423,8 @@ plot_heatmap_log2fc_compact <- function(seurat_obj, top5_combos) {
   # ====================================================================
   # 2. Safely Compute Mean Expression for All Modules
   # ====================================================================
-  # Extract the log-normalized data matrix
   expr_matrix <- GetAssayData(seurat_obj, assay = "SCT", slot = "data")
   
-  # Helper function to compute mean expression for valid genes
   calc_mean <- function(genes, mat) {
     valid_genes <- intersect(genes, rownames(mat))
     if(length(valid_genes) == 0) return(rep(0, ncol(mat)))
@@ -434,12 +432,10 @@ plot_heatmap_log2fc_compact <- function(seurat_obj, top5_combos) {
     return(colMeans(mat[valid_genes, , drop = FALSE]))
   }
   
-  # Compute and assign the 6 GO Scores directly to metadata
   for (mod_name in names(go_terms_genes)) {
     seurat_obj[[mod_name]] <- calc_mean(go_terms_genes[[mod_name]], expr_matrix)
   }
   
-  # Compute and assign the 3 Safety Scores directly to metadata
   for (mod_name in names(state_genes)) {
     seurat_obj[[mod_name]] <- calc_mean(state_genes[[mod_name]], expr_matrix)
   }
@@ -469,18 +465,21 @@ plot_heatmap_log2fc_compact <- function(seurat_obj, top5_combos) {
   )
   
   # ====================================================================
-  # 4. Calculate Log2FC and Filter Reference
+  # 4. Calculate Log2FC, Pct Expressed, and Filter Reference
   # ====================================================================
   heat_df <- meta %>%
     select(plot_group, all_of(names(module_mapping))) %>%
     pivot_longer(cols = -plot_group, names_to = "raw_col", values_to = "score") %>%
     mutate(module = module_mapping[raw_col]) %>%
     group_by(plot_group, module) %>%
-    summarise(mean_score = mean(score, na.rm = TRUE), .groups = "drop")
+    summarise(
+      mean_score = mean(score, na.rm = TRUE),
+      pct_expressed = mean(score > 0, na.rm = TRUE) * 100, # Added: Calculate % of cells expressing the module
+      .groups = "drop"
+    )
   
-  pc <- 0.01 # Pseudocount to prevent log2(0)
+  pc <- 0.01 
   
-  # Calculate baseline, then compute Log2FC
   heat_df <- heat_df %>%
     group_by(module) %>%
     mutate(
@@ -488,13 +487,11 @@ plot_heatmap_log2fc_compact <- function(seurat_obj, top5_combos) {
       log2fc = log2((mean_score + pc) / (disease_baseline + pc))
     ) %>%
     ungroup() %>%
-    # DROP the IL-1β reference column after calculation to save space
     filter(plot_group != "IL-1β")
   
   # ====================================================================
   # 5. Factor Ordering for Visual Narrative
   # ====================================================================
-  # Define X-axis order (Disease column is gone, plot top combos + healthy)
   heat_df$plot_group <- factor(heat_df$plot_group, 
                                levels = c(top5_combos, "Control"))
   
@@ -515,18 +512,22 @@ plot_heatmap_log2fc_compact <- function(seurat_obj, top5_combos) {
                            levels = rev(c(catabolic_terms, anabolic_terms, safety_terms)))
   
   # ====================================================================
-  # 6. Build the Heatmap
+  # 6. Build the Dot Plot
   # ====================================================================
   npg_red  <- pal_npg("nrc")(10)[1] 
   npg_blue <- pal_npg("nrc")(10)[4] 
   
-  # Cap extreme Log2FC values to prevent color washout
   limit_val <- 3
   heat_df$log2fc_capped <- pmax(pmin(heat_df$log2fc, limit_val), -limit_val)
   
-  p <- ggplot(heat_df, aes(x = plot_group, y = module, fill = log2fc_capped)) +
+  p <- ggplot(heat_df, aes(x = plot_group, y = module)) +
     
-    geom_tile(color = "white", linewidth = 0.8) +
+    # Replaced geom_tile with geom_point. Shape 21 allows a border stroke and a fill color.
+    geom_point(aes(size = pct_expressed, fill = log2fc_capped), 
+               shape = 21, color = "black", stroke = 0.6) +
+    
+    # Define the sizing scale for the dots
+    scale_size_continuous(name = "% Expressed", range = c(1, 7), limits = c(0, 100)) +
     
     scale_fill_gradient2(low = npg_blue, mid = "#F7F7F7", high = npg_red, midpoint = 0, 
                          limits = c(-limit_val, limit_val), oob = squish,
@@ -542,20 +543,28 @@ plot_heatmap_log2fc_compact <- function(seurat_obj, top5_combos) {
       
       strip.placement = "outside",
       strip.background = element_rect(fill = "grey90", color = "white"),
-      # Changed angle to 90 for vertical text reading bottom-to-top
       strip.text.y.left = element_text(angle = 90, face = "bold", size = 11, color = "black"),
       
-      panel.grid = element_blank(), 
+      # Added faint gridlines. These are critical in dot plots for readability across columns.
+      panel.grid.major = element_line(color = "grey85", linewidth = 0.4),
+      panel.grid.minor = element_blank(),
+      
       legend.position = "right",
       legend.title = element_text(face = "bold", size = 11),
       legend.text = element_text(size = 10)
+    ) +
+    # Force the legends to render cleanly with black borders
+    guides(
+      fill = guide_colorbar(frame.colour = "black", ticks.colour = "black", barwidth = 0.8),
+      size = guide_legend(override.aes = list(fill = "black"))
     )
   
   return(p)
 }
 
-fig5e_heatmap <- plot_heatmap_log2fc_compact(merged.sct, top5_combos)
-ggsave("./figures/figure5/Figure5e_GO_Heatmap.pdf", plot = fig5e_heatmap, width =6, height = 5, units = "in", dpi = 300)
+fig5f_dotplot <- plot_dotplot_log2fc_compact(merged.sct, top5_combos)
+ggsave("./Figure5f_GO_DotPlot.pdf", plot = fig5f_dotplot, width =6, height = 5, units = "in", dpi = 300)
+
 
 ### figure 5 g (single additive vs combi synergy of Modules)
 ### the code is not available in R.

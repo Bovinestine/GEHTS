@@ -1,26 +1,26 @@
 # Project name: GEHTS-chip
 # Author: Nathan Wooseok Lee
 # conda env: seurat4
-# date: 260302
+# date: 260524
 
 ### Figure 4a (Efficacy Score visualization)
 # ==============================================================================
-# Description: Function to plot and save a boxplot of drug efficacy probabilities.
+# Description: Ver.1 Function to plot and save a bar plot of drug efficacy probabilities.
 # ==============================================================================
-
 library(ggplot2)
 library(dplyr)
 library(tidyr)
 library(randomForest)
-#' Generate and Save Drug Efficacy Boxplot
+
+#' Generate and Save Drug Efficacy Bar Plot
 #'
 #' @param prob_sng10_raw A list or named vector of ALL raw probabilities at dose 10.
 #' @param prob_sng0.1_raw A list or named vector of ALL raw probabilities at dose 0.1.
-#' @return The boxplot with jittered datapoints.
+#' @return The grouped bar plot with error bars.
 #' @export
-plot_efficacy_boxplot <- function(prob_sng10_raw, prob_sng0.1_raw) {
+plot_efficacy_barplot <- function(prob_sng10_raw, prob_sng0.1_raw) {
   
-  # 1. Convert lists/vectors to data frames
+  # 1. Convert raw lists to data frames
   df_10 <- stack(prob_sng10_raw)
   colnames(df_10) <- c("Probability", "Drug")
   df_10$Dose <- "10"
@@ -30,37 +30,51 @@ plot_efficacy_boxplot <- function(prob_sng10_raw, prob_sng0.1_raw) {
   df_01$Dose <- "0.1"
   
   # 2. Combine and format
-  boxplot_data <- rbind(df_10, df_01)
-  boxplot_data$Dose <- factor(boxplot_data$Dose, levels = c("0.1", "10"))
+  raw_data <- rbind(df_10, df_01)
+  raw_data$Dose <- factor(raw_data$Dose, levels = c("0.1", "10"))
   
   # 3. Filter out baseline conditions
   exclude_terms <- c('control', 'inflammatory')
-  boxplot_data <- boxplot_data[!boxplot_data$Drug %in% exclude_terms, ]
+  raw_data <- raw_data[!raw_data$Drug %in% exclude_terms, ]
   
-  # 4. Create the boxplot with datapoints
-  box_plot <- ggplot(boxplot_data, aes(x = Drug, y = Probability, fill = Dose)) +
-    # Boxplot: hide default outliers since geom_jitter will plot all points
-    geom_boxplot(outlier.shape = NA, alpha = 0.7, position = position_dodge(width = 0.8)) + 
-    # Jitter: plots the individual datapoints overlaid on the boxplots
-    geom_jitter(aes(color = Dose), 
-                position = position_jitterdodge(jitter.width = 0.1, dodge.width = 0.8), 
-                size = 1, alpha = 0.4) +
-    # --- CHANGE THESE TWO LINES ---
+  # 4. Calculate Mean and Standard Error (SEM) for the error bars
+  summary_data <- raw_data %>%
+    group_by(Drug, Dose) %>%
+    summarise(
+      Mean_Probability = mean(Probability, na.rm = TRUE),
+      SE_Probability = sd(Probability, na.rm = TRUE) / sqrt(n()),
+      .groups = "drop"
+    )
+  
+  # 5. Create the Bar Plot
+  bar_plot <- ggplot(summary_data, aes(x = Drug, y = Mean_Probability, fill = Dose)) +
+    # Draw the bars
+    geom_bar(stat = "identity", position = position_dodge(width = 0.8), 
+             color = "black", linewidth = 0.3, alpha = 0.9) +
+    
+    # Draw the error bars (Mean +/- SEM)
+    geom_errorbar(aes(ymin = Mean_Probability - SE_Probability, 
+                      ymax = Mean_Probability + SE_Probability),
+                  position = position_dodge(width = 0.8), 
+                  width = 0.25, alpha = 0.7, linewidth = 0.5) +
+    
+    # Apply the discrete blue colors we used previously
     scale_fill_manual(values = c("0.1" = "#A6CEE3", "10" = "#1F78B4")) + 
-    scale_color_manual(values = c("0.1" = "#A6CEE3", "10" = "#1F78B4")) +
-    # ------------------------------
+    
     theme_minimal() +
     theme(
       axis.text.x = element_text(angle = 45, hjust = 1, face = "bold"),
       axis.text.y = element_text(face = "bold"),
-      panel.grid.major.x = element_blank() # Clean up x-axis grid lines
+      panel.grid.major.x = element_blank() # Keep x-axis clean
     ) +
-    labs(fill = "Dose (\u03BCM)", color = "Dose (\u03BCM)", 
-         x = "Drug", y = "Efficacy Probability")
+    labs(fill = "Dose (\u03BCM)", 
+         x = "Drug", 
+         y = "Mean Efficacy Probability")
   
-  return(box_plot)
+  return(bar_plot)
 }
 
+# Exceution
 # refer following code files:
 # Scoringmethods.r
 # PredictionScore.r
@@ -73,83 +87,139 @@ prob_list_rf_raw <- predict_all_doses_raw(rf_model, sin.sct, cmb.sct)
 prob_sng10_rf_raw <- prob_list_rf_raw[[1]]
 prob_sng0.1_rf_raw <- prob_list_rf_raw[[2]]
 
-# 3. Use the boxplot function (from the previous response)
-fig_4a_boxplot <- plot_efficacy_boxplot(prob_sng10_rf_raw, prob_sng0.1_rf_raw)
+fig_4b_barplot <- plot_efficacy_barplot(prob_sng10_rf_raw, prob_sng0.1_rf_raw)
 
 # 4. View the plot
-print(fig_4a_boxplot)
-ggsave("./figures/figure4/Figure4_efficacyBoxplot260427.pdf", plot = fig_4a_boxplot, width = 6, height = 4.5, units = "in", dpi = 300)
+ggsave("./Figure4_efficacyBarplot260517.pdf", plot = fig_4b_barplot, width = 7, height = 5.2, units = "in", dpi = 300)
 
-
+### Figure 4b merged scatter plot
 # ==============================================================================
-# Script Name: efficacy_heatmap.R
-# Description: Function to plot and save a heatmap of drug efficacy probabilities.
+# Script Name: phenotypic_screening.R
+# Description: Functions to generate a 2D phenotypic screening plot (Figure 4b).
 # ==============================================================================
 
-library(ggplot2)
+suppressPackageStartupMessages({
+  library(Seurat)
+  library(dplyr)
+  library(ggplot2)
+  library(ggrepel)
+  library(ggsci)
+})
 
-#' Generate and Save Drug Efficacy Heatmap
-#'
-#' This function creates a heatmap comparing the mean probabilities of drug efficacy 
-#' at two different doses (0.1 and 10). It automatically filters out 'control' 
-#' and 'inflammatory' baseline conditions before plotting.
-#'
-#' @param prob_sng10 A named numeric vector of mean probabilities at dose 10.
-#' @param prob_sng0.1 A named numeric vector of mean probabilities at dose 0.1.
-#'
-#' @return The heatmap plot.
-#' @export
-#'
-#' @examples
-#' # mock_dose10 <- c(DrugA = 0.8, DrugB = 0.6, control = 0.1)
-#' # mock_dose0.1 <- c(DrugA = 0.4, DrugB = 0.3, control = 0.1)
-#' # efficacy_heatmap <- plot_efficacy_heatmap(mock_dose10, mock_dose0.1)
-plot_efficacy_heatmap <- function(prob_sng10, prob_sng0.1) {
+#' Generate and Save Phenotypic Screening Plot
+#' 
+#' @param seurat_obj A merged Seurat object with 'drug_name', 'dose', and 'drug_condition' in meta.data
+#' @param genes_anabolic Vector of anabolic genes
+#' @param genes_inflammatory Vector of inflammatory/catabolic genes
+#' @param topn Number of anntation display of drug_condition
+#' @return The ggplot object
+plot_phenotypic_screening <- function(
+    seurat_obj, 
+    genes_anabolic, 
+    genes_inflammatory,
+    topn = 5) {
+    
+  # 1. Calculate coordinates and ratios
+  DefaultAssay(seurat_obj) <- "SCT"
+  exp_matrix <- GetAssayData(seurat_obj, slot = "data")
   
-  # 1. Filter out baseline conditions
-  exclude_terms <- c('control', 'inflammatory')
-  prob_10_filtered <- prob_sng10[!names(prob_sng10) %in% exclude_terms]
-  prob_01_filtered <- prob_sng0.1[!names(prob_sng0.1) %in% exclude_terms]
-
-  # 2. Prepare data for ggplot
-  heatmap_data <- data.frame(
-    Drug = c(names(prob_10_filtered), names(prob_01_filtered)),
-    Dose = factor(c(rep("10", length(prob_10_filtered)), 
-                    rep("0.1", length(prob_01_filtered))), 
-                  levels = c("0.1", "10")), # Setting levels keeps y-axis ordered
-    MeanProbability = c(prob_10_filtered, prob_01_filtered)
+  # Calculate mean expression for the given gene sets per cell
+  seurat_obj$Anabolic_Score <- colMeans(as.matrix(exp_matrix[genes_anabolic, , drop = FALSE]))
+  seurat_obj$Catabolic_Score <- colMeans(as.matrix(exp_matrix[genes_inflammatory, , drop = FALSE]))
+  
+  # Summarize metrics grouping by Drug and Dose
+  plot_data <- seurat_obj@meta.data %>%
+    group_by(drug_name, dose, drug_condition) %>%
+    summarise(
+      mean_ana  = mean(Anabolic_Score, na.rm = TRUE),
+      se_ana    = sd(Anabolic_Score, na.rm = TRUE) / sqrt(n()),
+      mean_cata = mean(Catabolic_Score, na.rm = TRUE),
+      se_cata   = sd(Catabolic_Score, na.rm = TRUE) / sqrt(n()),
+      .groups   = 'drop'
+    ) %>%
+    mutate(
+      AC_Ratio = mean_ana / mean_cata
+    )
+  
+  # 2. Format Data & Identify Top/Bottom Hits for Labels
+  top_hits    <- plot_data %>% top_n(topn, AC_Ratio) %>% pull(drug_condition)
+  bottom_hits <- plot_data %>% top_n(topn, -AC_Ratio) %>% pull(drug_condition)
+  controls    <- grep("control|inflammatory", plot_data$drug_condition, 
+                      value = TRUE, ignore.case = TRUE)
+  
+  plot_data <- plot_data %>%
+    mutate(
+      Label_Text = ifelse(drug_condition %in% c(top_hits, bottom_hits, controls), 
+                          drug_name, NA),
+      
+      # --- NEW: Categorize points into the 4 distinct groups for coloring ---
+      Group = case_when(
+        grepl("control", drug_condition, ignore.case = TRUE) ~ "Basal",
+        grepl("inflammatory", drug_condition, ignore.case = TRUE) ~ "IL-1β",
+        dose == 10 | dose == "10" ~ "10 µM",
+        dose == 0.1 | dose == "0.1" ~ "0.1 µM",
+        TRUE ~ "Other"
+      ),
+      # Set factor levels to control the order in the legend
+      Group = factor(Group, levels = c("Basal", "IL-1β", "0.1 µM", "10 µM"))
+    )  
+  
+  # 3. Define Discrete Colors
+  condition_colors <- c(
+    "Basal" = "#3C5488FF", # NPG Blue
+    "IL-1β"           = "#E64B35FF", # NPG Red
+    "0.1 µM"          = "#A6CEE3", # Sky blue 
+    "10 µM"           = "#1f78b4"  # Steel blue
   )
-
-  # 3. Create the heatmap
-  heatmap_plot <- ggplot(heatmap_data, aes(x = Drug, y = Dose, fill = MeanProbability)) +
-    geom_tile(color = "white", linewidth = 0.2) + # Added subtle grid lines for clarity
-    scale_fill_viridis_c(option = "viridis", na.value = "white") + # Built into ggplot2
-    coord_fixed() + 
-    theme_minimal() +
+  
+  # 4. Generate Plot
+  p <- ggplot(plot_data, aes(x = mean_cata, y = mean_ana)) +
+    # Error bars
+    geom_errorbar(aes(ymin = mean_ana - se_ana, ymax = mean_ana + se_ana), 
+                  color = "grey80", width = 0) +
+    geom_errorbarh(aes(xmin = mean_cata - se_cata, xmax = mean_cata + se_cata), 
+                   color = "grey80", height = 0) +
+    
+    # Quadrant lines
+    geom_vline(xintercept = mean(range(plot_data$mean_cata, na.rm = TRUE)), 
+               linetype = "dotted", color = "grey60") +
+    geom_hline(yintercept = mean(range(plot_data$mean_ana, na.rm = TRUE)), 
+               linetype = "dotted", color = "grey60") +
+    
+    # Lines connecting the low and high doses of the same drug
+    geom_line(aes(group = drug_name), color = "grey60", 
+              linewidth = 0.5, alpha = 0.6) +
+    
+    # --- CHANGED: Points now use the discrete 'Group' column for fill color ---
+    geom_point(aes(fill = Group), shape = 21, size = 6, alpha = 0.7, color = "black") +
+    scale_fill_manual(name = "Condition", values = condition_colors) +
+    
+    # Text labels
+    geom_text_repel(aes(label = Label_Text), size = 3.5, fontface = "bold",
+                    box.padding = 0.6, max.overlaps = 50, min.segment.length = 0) + 
+    
+    theme_bw() +
+    labs(x = "Catabolic gene sum (a.u.)", y = "Anabolic gene sum (a.u.)") +
     theme(
-      axis.text.x = element_text(angle = 45, hjust = 1, face = "bold"),
-      axis.text.y = element_text(face = "bold"),
-      panel.grid = element_blank() # Removes distracting background grid
-    ) +
-    labs(fill = "Mean\nProbability", x = "Drug", y = "Dose (\u03BCM)") # Added micromolar symbol
-
-  # 6. Return filepath invisibly 
-  return(heatmap_plot)
+      panel.grid.minor = element_blank(), 
+      axis.title = element_text(face = "bold"),
+      legend.position = "right", 
+      legend.background = element_rect(fill = "white", color = "grey90")
+    )
+  
+  return(p)
 }
 
-# refer following code files:
-# Scoringmethods.r
-# PredictionScore.r
-rf_model 
-prob_list_rf <- predict_all_doses(rf_model, sin.sct, cmb.sct)
-prob_sng10_rf <-prob_list_rf[[1]]
-prob_sng0.1_rf <-prob_list_rf[[2]]
-prob_cmb0.1_rf <-prob_list_rf[[3]]
+mac_sin.sct <- merge(sin.sct, mac.sct)
 
-# Example usage
-fig_4a <- plot_efficacy_heatmap(prob_sng10_rf, prob_sng0.1_rf)
+fig4b_plot <- plot_phenotypic_screening(mac_sin.sct, anabolic, inflammatory, 13)
+print(fig4b_plot)
+ggsave("./Figure4_anaCata_2dScatter_260502.pdf", plot = fig4b_plot, width = 7, height = 5.2, units = "in", dpi = 300)
 
 
+
+
+#####################################
 library(Seurat)
 library(dplyr)
 library(reshape2)
@@ -163,30 +233,30 @@ library(svglite)
 mac.sct$drug_name <- mac.sct$drug_condition
 merged.sct <- merge(mac.sct, sin.sct)
 
-# Figure 4b 
-fig_4b_dumbbel <- plot_automated_coexpression(merged.sct)
-svglite("./figures/figure4/fig4_dumbbel_Coexpression_analysis_rapamycin_10.svg", width = 9, height = 5.5)
-print(fig_dumbbel)
-dev.off()
-# rapamycin differential co-expression analysis
-# for main figure, we draw a straightforward Dumbbell plot.
-
-#' Automated Directional Co-expression Dumbbell Plot
+ 
+### Figure 4d (differential co-expression analysis)
+# ==============================================================================
+# Description: Function to plot and save a dumbbell plot
+# ==============================================================================
+#' Automated Directional Co-expression Dumbbell Plot (with Healthy Target)
 #'
 #' Automatically computes the top 10 most divergent Pearson correlations between 
-#' two single-cell populations and plots their trajectory.
+#' two single-cell populations and plots their trajectory, referencing a healthy baseline.
 #'
 #' @param seurat_obj A Seurat object containing single-cell expression data.
 #' @param group_by Character. Metadata column containing condition labels. Default is "drug_condition".
-#' @param cond_ref Character. Exact metadata string for the reference condition.
+#' @param cond_ref Character. Exact metadata string for the reference (disease) condition.
 #' @param cond_treat Character. Exact metadata string for the treatment condition.
+#' @param cond_healthy Character. Exact metadata string for the healthy/control condition.
 #' @param label_ref Character. Legend display name. Defaults to cond_ref.
 #' @param label_treat Character. Legend display name. Defaults to cond_treat.
+#' @param label_healthy Character. Legend display name. Defaults to cond_healthy.
 #' @param top_n Integer. Number of top divergent pairs to extract automatically. Default is 10.
 #' @param assay Character. The Seurat assay to use. Default is "SCT".
 #' @param slot Character. The data slot to use for correlation math. Default is "data".
 #' @param color_ref Character. Hex code for reference dot. Default is NPG Red.
 #' @param color_treat Character. Hex code for treatment dot. Default is NPG Blue.
+#' @param color_healthy Character. Hex code for healthy target. Default is NPG Green.
 #'
 #' @return A ggplot2 object.
 #' @export
@@ -201,13 +271,16 @@ plot_automated_coexpression <- function(seurat_obj,
                                         group_by = "drug_condition",
                                         cond_ref = "inflammatory", 
                                         cond_treat = "rapamycin_10",
-                                        label_ref = cond_ref,       # Auto-inherits parameter input
-                                        label_treat = cond_treat,   # Auto-inherits parameter input
+                                        cond_healthy = "control",           # NEW
+                                        label_ref = cond_ref,
+                                        label_treat = cond_treat,
+                                        label_healthy = cond_healthy,       # NEW
                                         top_n = 10,
                                         assay = "SCT", 
                                         slot = "data",
                                         color_ref = "#E64B35FF",
-                                        color_treat = "#4DBBD5FF") {
+                                        color_treat = "#4DBBD5FF",
+                                        color_healthy = "#00A087FF") {      # NEW (NPG Green)
   
   # ---------------------------------------------------------------------------
   # 1. INPUT VALIDATION
@@ -216,8 +289,8 @@ plot_automated_coexpression <- function(seurat_obj,
   if (!group_by %in% colnames(seurat_obj@meta.data)) stop(paste("Error: Column", group_by, "not found."))
   
   meta_data <- seurat_obj@meta.data
-  if (!cond_ref %in% meta_data[[group_by]] || !cond_treat %in% meta_data[[group_by]]) {
-    stop("Error: Specified conditions not found within the group_by metadata column.")
+  if (!all(c(cond_ref, cond_treat, cond_healthy) %in% meta_data[[group_by]])) {
+    stop("Error: One or more specified conditions not found within the group_by metadata column.")
   }
   
   # ---------------------------------------------------------------------------
@@ -226,36 +299,41 @@ plot_automated_coexpression <- function(seurat_obj,
   DefaultAssay(seurat_obj) <- assay
   matrix_data <- GetAssayData(seurat_obj, slot = slot)
   
-  cells_ref <- rownames(meta_data[meta_data[[group_by]] == cond_ref, ])
-  cells_treat <- rownames(meta_data[meta_data[[group_by]] == cond_treat, ])
+  cells_ref     <- rownames(meta_data[meta_data[[group_by]] == cond_ref, ])
+  cells_treat   <- rownames(meta_data[meta_data[[group_by]] == cond_treat, ])
+  cells_healthy <- rownames(meta_data[meta_data[[group_by]] == cond_healthy, ])
   
   # Convert to standard dense matrices for cor()
-  mat_ref <- as.matrix(matrix_data[, cells_ref])
-  mat_treat <- as.matrix(matrix_data[, cells_treat])
+  mat_ref     <- as.matrix(matrix_data[, cells_ref])
+  mat_treat   <- as.matrix(matrix_data[, cells_treat])
+  mat_healthy <- as.matrix(matrix_data[, cells_healthy])
   
-  # Filter out genes with zero variance in either condition (prevents NA in Pearson)
-  var_ref <- apply(mat_ref, 1, var)
-  var_treat <- apply(mat_treat, 1, var)
-  valid_genes <- names(which(var_ref > 0 & var_treat > 0))
+  # Filter out genes with zero variance in ANY condition (prevents NA in Pearson)
+  var_ref     <- apply(mat_ref, 1, var)
+  var_treat   <- apply(mat_treat, 1, var)
+  var_healthy <- apply(mat_healthy, 1, var)
+  valid_genes <- names(which(var_ref > 0 & var_treat > 0 & var_healthy > 0))
   
-  mat_ref <- mat_ref[valid_genes, ]
-  mat_treat <- mat_treat[valid_genes, ]
+  mat_ref     <- mat_ref[valid_genes, ]
+  mat_treat   <- mat_treat[valid_genes, ]
+  mat_healthy <- mat_healthy[valid_genes, ]
   
   # ---------------------------------------------------------------------------
-  # 3. VECTORIZED CORRELATION MATH (Highly Scalable)
+  # 3. VECTORIZED CORRELATION MATH
   # ---------------------------------------------------------------------------
-  # cor() expects cells as rows, genes as columns, so we transpose (t)
-  cor_ref_mat <- cor(t(mat_ref), method = "pearson")
-  cor_treat_mat <- cor(t(mat_treat), method = "pearson")
+  cor_ref_mat     <- cor(t(mat_ref), method = "pearson")
+  cor_treat_mat   <- cor(t(mat_treat), method = "pearson")
+  cor_healthy_mat <- cor(t(mat_healthy), method = "pearson")
   
-  # Extract the upper triangle to avoid duplicates (Gene A vs B) and self (Gene A vs A)
+  # Extract the upper triangle
   upper_idx <- which(upper.tri(cor_ref_mat), arr.ind = TRUE)
   
   df_all <- data.frame(
-    Gene1 = rownames(cor_ref_mat)[upper_idx[, 1]],
-    Gene2 = colnames(cor_ref_mat)[upper_idx[, 2]],
-    R_Ref = cor_ref_mat[upper_idx],
-    R_Treat = cor_treat_mat[upper_idx],
+    Gene1     = rownames(cor_ref_mat)[upper_idx[, 1]],
+    Gene2     = colnames(cor_ref_mat)[upper_idx[, 2]],
+    R_Ref     = cor_ref_mat[upper_idx],
+    R_Treat   = cor_treat_mat[upper_idx],
+    R_Healthy = cor_healthy_mat[upper_idx],
     stringsAsFactors = FALSE
   )
   
@@ -266,49 +344,58 @@ plot_automated_coexpression <- function(seurat_obj,
     drop_na() %>%
     mutate(
       GenePair = paste0(Gene1, " - ", Gene2),
-      Delta_r = abs(R_Treat - R_Ref),
-      Category = paste("Top", top_n, "Divergent Interactions") # Unified category
+      Delta_r  = abs(R_Treat - R_Ref), # Still ranking by how much the drug moved the needle
+      Category = paste("Top", top_n, "Divergent Interactions") 
     ) %>%
     arrange(desc(Delta_r)) %>%
     slice_head(n = top_n) %>%
-    arrange(Delta_r) # Re-sort ascending so the largest shifts plot at the top visually
+    arrange(Delta_r) 
   
   # Lock factor levels
   df_plot$GenePair <- factor(df_plot$GenePair, levels = df_plot$GenePair)
   df_plot$Category <- factor(df_plot$Category, levels = unique(df_plot$Category))
   
-  # Dynamic Axis Scaling
-  max_val <- max(abs(c(df_plot$R_Ref, df_plot$R_Treat)), na.rm = TRUE)
+  # Dynamic Axis Scaling (Now includes healthy values)
+  max_val <- max(abs(c(df_plot$R_Ref, df_plot$R_Treat, df_plot$R_Healthy)), na.rm = TRUE)
   axis_limit <- ceiling(max_val * 10) / 10 + 0.1 
   
   # ---------------------------------------------------------------------------
   # 5. VISUALIZATION
   # ---------------------------------------------------------------------------
-  color_mapping <- setNames(c(color_ref, color_treat), c(label_ref, label_treat))
+  color_mapping <- setNames(
+    c(color_ref, color_treat, color_healthy), 
+    c(label_ref, label_treat, label_healthy)
+  )
   
   p_dumbbell <- ggplot(df_plot) +
     
     geom_vline(xintercept = 0, linetype = "dashed", color = "grey50", linewidth = 0.8) +
     
+    # 1. Draw the arrow from Disease -> Treatment
     geom_segment(aes(x = R_Ref, xend = R_Treat, y = GenePair, yend = GenePair),
                  color = "grey40", linewidth = 1.2, 
                  arrow = arrow(length = unit(0.12, "inches"), type = "closed")) +
+                 
+    # 2. Draw the Healthy Target (Using shape 23 = diamond to distinguish it)
+    geom_point(aes(x = R_Healthy, y = GenePair, fill = !!label_healthy), 
+               size = 4, shape = 23, color = "black", stroke = 1, alpha = 0.85) +
     
+    # 3. Draw the Reference (Disease) dot
     geom_point(aes(x = R_Ref, y = GenePair, fill = !!label_ref), 
                size = 4, shape = 21, color = "black", stroke = 1) +
     
+    # 4. Draw the Treatment point on top
     geom_point(aes(x = R_Treat, y = GenePair, fill = !!label_treat), 
                size = 4, shape = 21, color = "black", stroke = 1) +
     
     scale_fill_manual(values = color_mapping) +
-    # facet_grid(Category ~ ., scales = "free_y", space = "free_y", switch = "y") +
     scale_x_continuous(limits = c(-axis_limit, axis_limit), 
                        breaks = round(seq(-axis_limit, axis_limit, length.out = 5), 2)) +
     
     theme_bw() +
     labs(
       title = "Data-Driven Differential Co-expression",
-      subtitle = paste0("Unbiased extraction of highest magnitude transcriptomic shifts (", label_ref, " vs. ", label_treat, ")"),
+      subtitle = paste0("Trajectory from ", label_ref, " towards ", label_healthy, " via ", label_treat),
       x = "Pearson Correlation Coefficient (r)",
       y = ""
     ) +
@@ -319,7 +406,7 @@ plot_automated_coexpression <- function(seurat_obj,
       
       axis.text.y = element_text(size = 12, face = "bold.italic", color = "black"),
       axis.text.x = element_text(size = 11, color = "black"),
-      axis.title.x = element_text(size = 12, face = "bold", margin = margin(t = 10)),
+      axis.title.x = element_text(size = 12, face = "bold", margin = ggplot2::margin(t = 10)),
       
       strip.text.y.left = element_text(angle = 0, size = 11, face = "bold"),
       strip.background = element_rect(fill = "grey90", color = "black", linewidth = 1),
@@ -333,9 +420,15 @@ plot_automated_coexpression <- function(seurat_obj,
   return(p_dumbbell)
 }
 
+fig_4d_dumbbel <- plot_automated_coexpression(merged.sct)
+ggsave("./fig4_dumbbel_Coexpression_analysis_rapamycin_10_260502.pdf", plot= fig_4d_dumbbel, width = 7, height = 5.5, units = "in", dpi = 300)
+dev.off()
 
 
-###
+### Figure 4e (radar chart)
+# ==============================================================================
+# Description: Function to plot and save a radar chart of GO modality scores
+# ==============================================================================
 # radar chart for single drugs
 # Load necessary libraries
 library(Seurat)
@@ -538,89 +631,4 @@ plot_radar_fast(merged.sct,
 # 5. Safely close device and restore graphical parameters
 dev.off()
 par(old_par)
-
-
-# Figure 4d _ P38 pathway inhibitors
-
-
-plot_decoupling_boxplots <- function(seurat_obj, 
-                                     group_by = "drug_condition",
-                                     cond_ctrl = "control",
-                                     cond_inf = "inflammatory",
-                                     cond_A = "pamapimod_10",
-                                     cond_B = "SB203580_10",
-                                     label_ctrl = "Control",
-                                     label_inf = "IL-1β",
-                                     label_A = "Pamapimod",
-                                     label_B = "SB203580",
-                                     assay = "SCT", 
-                                     slot = "data") {
-  
-  # 1. Extract Data
-  DefaultAssay(seurat_obj) <- assay
-  mat <- GetAssayData(seurat_obj, slot = slot)[c("Sox9", "Col2a1"), , drop = FALSE]
-  
-  df <- data.frame(
-    Cell = colnames(seurat_obj),
-    Sox9 = as.numeric(mat["Sox9", ]),
-    Col2a1 = as.numeric(mat["Col2a1", ]),
-    Condition_Raw = seurat_obj@meta.data[[group_by]],
-    stringsAsFactors = FALSE
-  )
-  
-  # 2. Filter and Map Labels
-  target_conditions <- c(cond_ctrl, cond_inf, cond_A, cond_B)
-  df <- df %>% filter(Condition_Raw %in% target_conditions)
-  
-  label_mapping <- setNames(c(label_ctrl, label_inf, label_A, label_B), target_conditions)
-  df$Condition <- factor(label_mapping[df$Condition_Raw], 
-                         levels = c(label_ctrl, label_inf, label_A, label_B))
-  
-  # 3. Reshape for ggplot
-  df_melt <- melt(df, id.vars = c("Cell", "Condition_Raw", "Condition"), 
-                  variable.name = "Gene", value.name = "Expression")
-  
-  # 4. Colors
-  npg_colors <- setNames(
-    c("#4DBBD5FF", "#E64B35FF", "#8491B4FF", "#00A087FF"), 
-    c(label_ctrl, label_inf, label_A, label_B)
-  )
-  
-  # 5. Helper Function for Individual Box Plots
-  create_box <- function(gene_name, plot_title) {
-    ggplot(df_melt %>% filter(Gene == gene_name), aes(x = Condition, y = Expression, fill = Condition)) +
-      # Adding jittered points behind the boxplot handles the 50-200 cell count beautifully
-      geom_jitter(color = "grey60", size = 1, alpha = 0.5, width = 0.2) +
-      geom_boxplot(outlier.shape = NA, alpha = 0.9, color = "black", linewidth = 0.6, width = 0.6) +
-      scale_fill_manual(values = npg_colors) +
-      theme_classic() +
-      labs(title = plot_title, y = "Expression (Log-Normalized)", x = "") +
-      theme(
-        legend.position = "none",
-        plot.title = element_text(face = "bold.italic", size = 14, hjust = 0.5),
-        axis.text.x = element_text(angle = 45, hjust = 1, face = "bold", size = 11, color = "black"),
-        axis.text.y = element_text(size = 11, color = "black"),
-        axis.title.y = element_text(face = "bold", size = 12),
-        panel.border = element_rect(color = "black", fill = NA, linewidth = 1)
-      )
-  }
-  
-  # 6. Generate Panels
-  p_sox9 <- create_box("Sox9", "Sox9 (Master Regulator)")
-  p_col2 <- create_box("Col2a1", "Col2a1 (Functional Matrix)")
-  
-  # 7. Combine
-  final_plot <- p_sox9 + p_col2 + 
-    plot_annotation(
-      title = "Resolution of Transcriptional Decoupling",
-      theme = theme(plot.title = element_text(size = 15, face = "bold"))
-    )
-  
-  return(final_plot)
-}
-
-# --- Exceution Exampltion ---
-fig_4d_box <- plot_decoupling_boxplots(merged.sct)
-print(fig_box)
-
 
