@@ -66,7 +66,7 @@ plot_supplementary_violins <- function(seurat_obj,
 
   if (is.null(target_labels)) target_labels <- target_conditions
   DefaultAssay(seurat_obj) <- assay
-  mat  <- GetAssayData(seurat_obj, slot = slot)
+  mat  <- GetAssayData(seurat_obj, layer = slot)
   meta <- seurat_obj@meta.data
 
   conds_to_plot <- c(ref_control, ref_disease, target_conditions)

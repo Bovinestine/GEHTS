@@ -44,7 +44,7 @@ eff_splits   <- strsplit(names(prob_cmb0.1_rf), "&")
 std_eff_names <- paste0(pmin(sapply(eff_splits, `[`, 1), sapply(eff_splits, `[`, 2)), "&",
                          pmax(sapply(eff_splits, `[`, 1), sapply(eff_splits, `[`, 2)))
 efficacy_map <- setNames(as.numeric(prob_cmb0.1_rf), std_eff_names)
-cmb.sct$efficacy <- efficacy_map[cmb.sct$std_combi]
+cmb.sct$efficacy <- unname(efficacy_map[cmb.sct$std_combi])
 
 merged.sct <- merge(mac.sct, cmb.sct, add.cell.ids = c("mac", "cmb"))
 DefaultAssay(merged.sct) <- "SCT"
@@ -193,19 +193,19 @@ plot_bliss_synergy <- function(cmb_rf, sng_rf, top_n = 5) {
   p <- ggplot(df, aes(x = E_obs, y = Synergy)) +
     geom_hline(yintercept = 0, linetype = "dashed",
                color = "grey50", linewidth = 0.8) +
-    geom_point(aes(fill = Synergy), shape = 21, size = 3,
+    geom_point(shape = 21, size = 3, fill = "grey70",
                color = "black", stroke = 0.3, alpha = 0.85) +
-    scale_fill_gradient2(low = "#2166AC", mid = "#F7F7F7", high = "#B2182B",
-                         midpoint = 0, name = "Bliss Synergy") +
-    geom_point(data = highlight_df, aes(fill = Synergy),
-               shape = 21, size = 4.5, color = "black", stroke = 1.5) +
+    geom_point(data = highlight_df, aes(fill = std_combi),
+               shape = 21, size = 5, color = "black", stroke = 1.2) +
+    scale_fill_npg() +
     geom_text_repel(data = highlight_df, aes(label = display_name),
                     box.padding = 1.0, point.padding = 0.5,
                     segment.color = "black", segment.size = 0.5,
                     fontface = "bold", size = 4.0, max.overlaps = Inf) +
     theme_classic(base_size = 14) +
     labs(x = "ML Efficacy Score", y = "Bliss Synergy Score") +
-    theme(axis.title = element_text(face = "bold"))
+    theme(axis.title = element_text(face = "bold"),
+          legend.position = "none")
 
   list(plot = p, top_candidates = highlight_df)
 }
@@ -216,7 +216,7 @@ target_singles  <- unique(c(synergy_results$top_candidates$drug1,
                              synergy_results$top_candidates$drug2))
 
 ggsave(file.path(OUTPUT_MAIN, "Figure5d_bliss_synergy_scatter.pdf"),
-       plot = synergy_results$plot, width = 6.5, height = 5, dpi = 300)
+       plot = synergy_results$plot, width = 5, height = 5, dpi = 300)
 
 # =============================================================================
 # Figure 5e — ML Efficacy vs. Biological Rescue Index
@@ -319,7 +319,7 @@ merged.sct <- compute_go_scores(merged.sct, module_list = list(
 
 fig5e_plot <- plot_biological_alignment(merged.sct, prob_cmb0.1_rf, top5_combos)
 ggsave(file.path(OUTPUT_MAIN, "Figure5e_biological_alignment.pdf"),
-       plot = fig5e_plot, width = 5.5, height = 6, dpi = 300)
+       plot = fig5e_plot, width = 5, height = 5, dpi = 300)
 
 # =============================================================================
 # Figure 5f — Compact dot plot (Log2FC vs. disease, % expressing)

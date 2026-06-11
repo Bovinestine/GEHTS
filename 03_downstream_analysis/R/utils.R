@@ -51,7 +51,7 @@ create_heatmap_by_expression_ps <- function(seurat_object,
                                             genes_housekeeping = GENES_HOUSEKEEPING) {
 
   # Use counts for quantile-based gene filtering (residuals have mean ~0)
-  count_data <- GetAssayData(seurat_object, assay = assay, slot = "counts")
+  count_data <- GetAssayData(seurat_object, assay = assay, layer = "counts")
   count_data <- count_data[, colSums(is.finite(count_data)) > 0]
   avg_exp <- rowMeans(count_data, na.rm = TRUE)
 
@@ -77,7 +77,7 @@ create_heatmap_by_expression_ps <- function(seurat_object,
   ) %>% arrange(primary, secondary)
 
   # Pearson residuals are already centered — use directly
-  scale_data <- GetAssayData(seurat_object, assay = assay, slot = "scale.data")
+  scale_data <- GetAssayData(seurat_object, assay = assay, layer = "scale.data")
   avail_genes <- intersect(sorted_genes, rownames(scale_data))
 
   if (length(avail_genes) < length(sorted_genes)) {
@@ -222,7 +222,7 @@ compute_go_scores <- function(seurat_obj,
                               assay = "SCT",
                               slot  = "data") {
 
-  mat <- GetAssayData(seurat_obj, assay = assay, slot = slot)
+  mat <- GetAssayData(seurat_obj, assay = assay, layer = slot)
 
   calc_mean <- function(genes) {
     valid <- intersect(genes, rownames(mat))
@@ -328,7 +328,7 @@ draw_boxplots_for_genes_with_common_legend <- function(
 
   plot_list <- lapply(genes, function(gene) {
     expr <- as.vector(GetAssayData(seurat_object,
-                                   slot = datatype)[gene, cells_to_use, drop = TRUE])
+                                   layer = datatype)[gene, cells_to_use, drop = TRUE])
     df <- data.frame(Expression = expr, Condition = meta_sub$ConditionLabel)
 
     ymax <- max(df$Expression, na.rm = TRUE)
@@ -431,7 +431,7 @@ calculate_radar_scale <- function(seurat_obj,
   }
 
   DefaultAssay(seurat_obj) <- assay
-  mat  <- GetAssayData(seurat_obj, slot = slot)
+  mat  <- GetAssayData(seurat_obj, layer = slot)
   meta <- seurat_obj@meta.data
 
   all_metrics <- lapply(unique(meta[[group_by]]), function(cond) {

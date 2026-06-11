@@ -5,9 +5,8 @@
 # Subfigures:
 #   4b: Efficacy bar plot (mean ± SEM per drug, two doses)
 #   4c: 2D phenotypic screening scatter (anabolic vs. catabolic)
-#   4d: Highlighted UMAPs — pamapimod and XAV939 at dose 10 μM
-#   4e: Dumbbell plot of differential co-expression (disease→treatment→healthy)
-#   4f: Radar charts of 6 GO module scores per drug
+#   4d: Dumbbell plot of differential co-expression (disease→treatment→healthy)
+#   4e: Radar charts of 6 GO module scores per drug
 #
 # Prerequisites: config.R, utils.R, data_loading.R, prediction_score.R
 # Inputs: sin.sct, cmb.sct, mac.sct, prob_sng10_rf, prob_sng0.1_rf,
@@ -45,8 +44,6 @@ mac.sct$drug_name <- mac.sct$drug_condition
 mac_sin.sct   <- merge(sin.sct, mac.sct)
 mac_sin0.1.sct <- merge(sin0.1.sct, mac.sct)
 mac_cmb0.1.sct <- merge(cmb0.1.sct, mac.sct)
-
-merged.sct <- merge(mac.sct, sin.sct)
 
 # =============================================================================
 # Figure 4b — Efficacy bar plot
@@ -113,57 +110,79 @@ ggsave(file.path(OUTPUT_MAIN, "Figure4b_efficacy_barplot.pdf"),
 plot_phenotypic_screening <- function(seurat_obj,
                                       genes_anabolic     = GENES_ANABOLIC,
                                       genes_inflammatory = GENES_CATABOLIC,
-                                      topn = 5) {
+                                      topn = 5,
+                                      ellipse_level = 0.68) {
 
   DefaultAssay(seurat_obj) <- "SCT"
-  exp_mat <- GetAssayData(seurat_obj, slot = "data")
+  exp_mat <- GetAssayData(seurat_obj, layer = "data")
   seurat_obj$Anabolic_Score  <- colMeans(as.matrix(exp_mat[genes_anabolic, ,    drop = FALSE]))
   seurat_obj$Catabolic_Score <- colMeans(as.matrix(exp_mat[genes_inflammatory,, drop = FALSE]))
 
-  plot_data <- seurat_obj@meta.data %>%
-    group_by(drug_name, dose, drug_condition) %>%
+  meta <- seurat_obj@meta.data %>%
+    mutate(Group = case_when(
+      grepl("control",      drug_condition, ignore.case = TRUE) ~ "Basal",
+      grepl("inflammatory", drug_condition, ignore.case = TRUE) ~ "IL-1β",
+      dose == 10  | dose == "10"  ~ "10 µM",
+      dose == 0.1 | dose == "0.1" ~ "0.1 µM",
+      TRUE ~ "Other"
+    ),
+    Group = factor(Group, levels = c("Basal", "IL-1β", "0.1 µM", "10 µM")))
+
+  # Per-cell reference populations (mac.sct) — rendered as areas
+  mac_cells <- meta %>%
+    filter(grepl("control|inflammatory", drug_condition, ignore.case = TRUE))
+
+  # Aggregated drug conditions (sin.sct) — rendered as mean ± SE points
+  drug_summary <- meta %>%
+    filter(!grepl("control|inflammatory", drug_condition, ignore.case = TRUE)) %>%
+    group_by(drug_name, dose, drug_condition, Group) %>%
     summarise(mean_ana  = mean(Anabolic_Score,  na.rm = TRUE),
               se_ana    = sd(Anabolic_Score,  na.rm = TRUE) / sqrt(n()),
               mean_cata = mean(Catabolic_Score, na.rm = TRUE),
               se_cata   = sd(Catabolic_Score, na.rm = TRUE) / sqrt(n()),
               .groups = "drop") %>%
-    mutate(AC_Ratio = mean_ana / mean_cata)
-
-  top_hits    <- plot_data %>% top_n(topn,  AC_Ratio) %>% pull(drug_condition)
-  bottom_hits <- plot_data %>% top_n(topn, -AC_Ratio) %>% pull(drug_condition)
-  controls    <- grep("control|inflammatory", plot_data$drug_condition,
-                      value = TRUE, ignore.case = TRUE)
-
-  plot_data <- plot_data %>%
-    mutate(
-      Label_Text = ifelse(drug_condition %in% c(top_hits, bottom_hits, controls),
-                          drug_name, NA),
-      Group = case_when(
-        grepl("control",     drug_condition, ignore.case = TRUE) ~ "Basal",
-        grepl("inflammatory", drug_condition, ignore.case = TRUE) ~ "IL-1β",
-        dose == 10  | dose == "10"  ~ "10 µM",
-        dose == 0.1 | dose == "0.1" ~ "0.1 µM",
-        TRUE ~ "Other"
-      ),
-      Group = factor(Group, levels = c("Basal", "IL-1β", "0.1 µM", "10 µM"))
-    )
+    mutate(AC_Ratio  = mean_ana / mean_cata,
+           Label_Text = ifelse(drug_condition %in% c(
+             top_n(., topn,  AC_Ratio)$drug_condition,
+             top_n(., topn, -AC_Ratio)$drug_condition
+           ), drug_name, NA))
 
   cond_colors <- c(Basal = COL_CONTROL, `IL-1β` = COL_DISEASE,
                    `0.1 µM` = COL_DOSE_LOW, `10 µM` = COL_DOSE_HIGH)
 
-  ggplot(plot_data, aes(x = mean_cata, y = mean_ana)) +
-    geom_errorbar(aes(ymin = mean_ana - se_ana, ymax = mean_ana + se_ana),
+  ggplot() +
+    # Reference population areas (Basal and IL-1β ellipses)
+    stat_ellipse(data = mac_cells,
+                 aes(x = Catabolic_Score, y = Anabolic_Score,
+                     fill = Group, color = Group),
+                 geom = "polygon", type = "t", level = ellipse_level,
+                 alpha = 0.15, linewidth = 0.8, linetype = "dashed") +
+    # Reference midlines (based on drug summary range)
+    geom_vline(xintercept = mean(range(drug_summary$mean_cata, na.rm = TRUE)),
+               linetype = "dotted", color = "grey60") +
+    geom_hline(yintercept = mean(range(drug_summary$mean_ana, na.rm = TRUE)),
+               linetype = "dotted", color = "grey60") +
+    # Dose-response trajectories
+    geom_line(data = drug_summary,
+              aes(x = mean_cata, y = mean_ana, group = drug_name),
+              color = "grey60", linewidth = 0.5, alpha = 0.6) +
+    # Error bars
+    geom_errorbar(data = drug_summary,
+                  aes(x = mean_cata, ymin = mean_ana - se_ana, ymax = mean_ana + se_ana),
                   color = "grey80", width = 0) +
-    geom_errorbarh(aes(xmin = mean_cata - se_cata, xmax = mean_cata + se_cata),
+    geom_errorbarh(data = drug_summary,
+                   aes(y = mean_ana, xmin = mean_cata - se_cata, xmax = mean_cata + se_cata),
                    color = "grey80", height = 0) +
-    geom_vline(xintercept = mean(range(plot_data$mean_cata, na.rm = TRUE)),
-               linetype = "dotted", color = "grey60") +
-    geom_hline(yintercept = mean(range(plot_data$mean_ana, na.rm = TRUE)),
-               linetype = "dotted", color = "grey60") +
-    geom_line(aes(group = drug_name), color = "grey60", linewidth = 0.5, alpha = 0.6) +
-    geom_point(aes(fill = Group), shape = 21, size = 6, alpha = 0.7, color = "black") +
+    # Drug condition points
+    geom_point(data = drug_summary,
+               aes(x = mean_cata, y = mean_ana, fill = Group),
+               shape = 21, size = 6, alpha = 0.7, color = "black") +
     scale_fill_manual(name = "Condition", values = cond_colors) +
-    geom_text_repel(aes(label = Label_Text), size = 3.5, fontface = "bold",
+    scale_color_manual(values = cond_colors, guide = "none") +
+    # Top/bottom hit labels
+    geom_text_repel(data = drug_summary,
+                    aes(x = mean_cata, y = mean_ana, label = Label_Text),
+                    size = 3.5, fontface = "bold",
                     box.padding = 0.6, max.overlaps = 50, min.segment.length = 0) +
     theme_bw() +
     labs(x = "Catabolic gene sum (a.u.)", y = "Anabolic gene sum (a.u.)") +
@@ -172,26 +191,13 @@ plot_phenotypic_screening <- function(seurat_obj,
           legend.position  = "right")
 }
 
-fig_4c <- plot_phenotypic_screening(mac_sin.sct, topn = 13)
-ggsave(file.path(OUTPUT_MAIN, "Figure4c_phenotypic_scatter.pdf"),
+fig_4c <- plot_phenotypic_screening(mac_sin.sct, topn = 5, ellipse_level = 0.68)
+ggsave(file.path(OUTPUT_MAIN, "Figure4c_phenotypic_scatter(1).pdf"),
        plot = fig_4c, width = 7, height = 5.2, dpi = 300)
 
-# =============================================================================
-# Figure 4d — Highlighted UMAPs: pamapimod (index 1) and XAV939 (index 13)
-# Requires sin.sct10 created by figure3.R
-# =============================================================================
-
-plot_highlighted_umaps(
-  sin.sct10,
-  plot_indices = c(1, 13),
-  output_pdf   = file.path(OUTPUT_MAIN, "Figure4d_highlighted_UMAP_pamapimod_XAV.pdf"),
-  ncol         = 2,
-  pdf_width    = 6,
-  pdf_height   = 3.5
-)
 
 # =============================================================================
-# Figure 4e (co-expression) — Dumbbell plot
+# Figure 4d (co-expression) — Dumbbell plot
 # =============================================================================
 
 #' Directional Co-expression Dumbbell Plot (Disease → Treatment → Healthy)
@@ -230,7 +236,7 @@ plot_automated_coexpression <- function(seurat_obj,
   }
 
   DefaultAssay(seurat_obj) <- assay
-  mat  <- GetAssayData(seurat_obj, slot = slot)
+  mat  <- GetAssayData(seurat_obj, layer = slot)
   meta <- seurat_obj@meta.data
 
   get_mat <- function(cond) {
@@ -262,7 +268,7 @@ plot_automated_coexpression <- function(seurat_obj,
   )
 
   df_plot <- df_all %>%
-    drop_na() %>%
+    na.omit() %>%
     mutate(GenePair = paste0(Gene1, " - ", Gene2),
            Delta_r  = abs(R_Treat - R_Ref)) %>%
     arrange(desc(Delta_r)) %>%
@@ -302,12 +308,12 @@ plot_automated_coexpression <- function(seurat_obj,
           panel.grid.minor.x = element_blank())
 }
 
-fig_4e_dumbbell <- plot_automated_coexpression(merged.sct)
-ggsave(file.path(OUTPUT_MAIN, "Figure4e_coexpression_dumbbell.pdf"),
-       plot = fig_4e_dumbbell, width = 7, height = 5.5, dpi = 300)
+fig_4d_dumbbell <- plot_automated_coexpression(mac_sin.sct)
+ggsave(file.path(OUTPUT_MAIN, "Figure4d_coexpression_dumbbell.pdf"),
+       plot = fig_4d_dumbbell, width = 7, height = 5.5, dpi = 300)
 
 # =============================================================================
-# Figure 4f — Radar charts of 6 GO module scores
+# Figure 4e — Radar charts of 6 GO module scores
 # =============================================================================
 
 #' Plot Phenotypic Shift Radar Chart for One Drug Condition
@@ -344,7 +350,7 @@ plot_radar_fast <- function(seurat_obj,
   if (is.null(target_label)) target_label <- target_condition
 
   DefaultAssay(seurat_obj) <- assay
-  mat  <- GetAssayData(seurat_obj, slot = slot)
+  mat  <- GetAssayData(seurat_obj, layer = slot)
   meta <- seurat_obj@meta.data
 
   get_metrics <- function(cond) {
@@ -387,17 +393,17 @@ plot_radar_fast <- function(seurat_obj,
 }
 
 # Compute universal scale across all conditions (run once)
-universal_scale <- calculate_radar_scale(merged.sct, module_list = GO_MODULES)
+universal_scale <- calculate_radar_scale(mac_sin.sct, module_list = GO_MODULES)
 save(universal_scale, file = file.path(DATA_DIR, "uni_scale.Rdata"))
 
 ## Radar chart (fmsb base-R graphics) ----
-svglite(file.path(OUTPUT_MAIN, "Figure4f_radar_top_vs_bottom.svg"),
+svglite(file.path(OUTPUT_MAIN, "Figure4e_radar_top_vs_bottom.svg"),
         width = 12, height = 5.5)
 old_par <- par(no.readonly = TRUE)
 par(mfrow = c(1, 2), mar = c(2, 2, 3, 5), xpd = TRUE)
-plot_radar_fast(merged.sct, "rapamycin_10",        universal_scale,
+plot_radar_fast(mac_sin.sct, "rapamycin_10",        universal_scale,
                 target_label = "Rapamycin (10 μM)")
-plot_radar_fast(merged.sct, "ALK5 inhibitor IV_10", universal_scale,
+plot_radar_fast(mac_sin.sct, "ALK5 inhibitor IV_10", universal_scale,
                 target_label = "ALK5 Inhibitor (10 μM)")
 dev.off()
 par(old_par)

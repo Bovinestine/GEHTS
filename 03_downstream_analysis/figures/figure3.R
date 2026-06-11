@@ -4,6 +4,7 @@
 # Subfigures:
 #   3b: Gene expression heatmap sorted by dose (sin.sct)
 #   3c: Global UMAP at dose 10 μM colored by drug name
+#   3d: Highlighted UMAPs — pamapimod and XAV939 at dose 10 μM
 #
 # Prerequisites: config.R, utils.R, data_loading.R
 # Inputs: sin.sct (loaded by data_loading.R)
@@ -84,3 +85,17 @@ ggsave(file.path(OUTPUT_MAIN, "Figure3c_UMAP_dose10.pdf"),
        plot = fig_3c, width = 6.5, height = 5, dpi = 300)
 
 save_session_info("figure3")
+
+# =============================================================================
+# Figure 3d — Highlighted UMAPs: pamapimod (index 1) and XAV939 (index 13)
+# Requires sin.sct10 created by figure3.R
+# =============================================================================
+
+plot_highlighted_umaps(
+  sin.sct10,
+  plot_indices = c(1, 13),
+  output_pdf   = file.path(OUTPUT_MAIN, "Figure4d_highlighted_UMAP_pamapimod_XAV.pdf"),
+  ncol         = 2,
+  pdf_width    = 6,
+  pdf_height   = 3.5
+)

@@ -36,7 +36,7 @@ suppressPackageStartupMessages({
 #' @export
 predict_efficacy <- function(seurat_obj, model, combo = FALSE) {
 
-  drug_data <- t(as.matrix(GetAssayData(seurat_obj, assay = "SCT", slot = "counts")))
+  drug_data <- t(as.matrix(GetAssayData(seurat_obj, assay = "SCT", layer = "counts")))
 
   # Feature alignment
   if (inherits(model, "xgb.Booster")) {

@@ -37,7 +37,7 @@ set.seed(SEED)
 #' @return A list with elements X (expression matrix) and y (binary label vector).
 #' @export
 prepare_data <- function(seurat_obj, gene_list) {
-  expr <- GetAssayData(seurat_obj, assay = "SCT", slot = "counts")[gene_list, ]
+  expr <- GetAssayData(seurat_obj, assay = "SCT", layer = "counts")[gene_list, ]
   X    <- t(as.matrix(expr))
 
   labels <- seurat_obj$drug_condition
