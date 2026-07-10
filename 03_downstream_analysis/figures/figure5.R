@@ -322,6 +322,131 @@ ggsave(file.path(OUTPUT_MAIN, "Figure5e_biological_alignment.pdf"),
        plot = fig5e_plot, width = 5, height = 5, dpi = 300)
 
 # =============================================================================
+# Figure 5e (test) — Same scatter but Basal and IL-1β shown as ranges
+#                    Analogous to the ellipses in figure 4c
+# =============================================================================
+
+#' Test Variant: Biological Alignment with Reference Populations as Ranges
+#'
+#' Basal (control) and IL-1β (disease) are shown as shaded mean ± SD bands
+#' at their fixed efficacy positions (x = 1.0 and x = 0.0), analogous to
+#' the ellipse areas used for reference populations in figure 4c.
+#'
+#' @param seurat_obj Merged Seurat object with combination and control cells.
+#' @param prob_cmb Named numeric vector of ML combination efficacy scores.
+#' @param top5_combos Character vector of top-5 combination names.
+#' @param range_width Half-width of the shaded reference bands on the X axis (default 0.04).
+#' @param range_sd Number of SDs to span for the band height (default 1).
+#' @return A ggplot2 object.
+#' @export
+test_plot_biological_alignment_ranges <- function(seurat_obj, prob_cmb, top5_combos,
+                                                  range_width = 0.04,
+                                                  range_sd    = 1) {
+
+  seurat_obj <- compute_go_scores(seurat_obj, module_list = GO_MODULES)
+
+  meta <- seurat_obj@meta.data %>%
+    mutate(
+      Anabolic_Score  = GO_Score1 + GO_Score2 + GO_Score3,
+      Catabolic_Score = GO_Score4 + GO_Score5 + GO_Score6,
+      Rescue_Index    = Anabolic_Score - Catabolic_Score,
+      plot_id = case_when(
+        drug_condition %in% c(COND_CONTROL, COND_DISEASE) ~ drug_condition,
+        drug_name1 != drug_name2 ~ paste0(
+          pmin(as.character(drug_name1), as.character(drug_name2)), "&",
+          pmax(as.character(drug_name1), as.character(drug_name2))
+        ),
+        TRUE ~ NA_character_
+      )
+    ) %>%
+    filter(!is.na(plot_id))
+
+  # Per-cell rescue index for reference populations → used to build ranges
+  ref_range <- meta %>%
+    filter(drug_condition %in% c(COND_CONTROL, COND_DISEASE)) %>%
+    mutate(Efficacy = ifelse(drug_condition == COND_CONTROL, 1.0, 0.0),
+           group    = ifelse(drug_condition == COND_CONTROL, "Basal", "IL-1β")) %>%
+    group_by(group, Efficacy) %>%
+    summarise(y_mean  = mean(Rescue_Index, na.rm = TRUE),
+              y_sd    = sd(Rescue_Index,   na.rm = TRUE),
+              .groups = "drop") %>%
+    mutate(y_lower = y_mean - range_sd * y_sd,
+           y_upper = y_mean + range_sd * y_sd,
+           x_lower = Efficacy - range_width,
+           x_upper = Efficacy + range_width)
+
+  ctrl_band <- ref_range %>% filter(group == "Basal")
+  dis_band  <- ref_range %>% filter(group == "IL-1β")
+
+  # Drug combination summary (exclude reference groups — shown as bands instead)
+  bio_df <- meta %>%
+    filter(!drug_condition %in% c(COND_CONTROL, COND_DISEASE)) %>%
+    group_by(plot_id) %>%
+    summarise(Rescue_Index = mean(Rescue_Index, na.rm = TRUE), .groups = "drop")
+
+  eff_splits    <- strsplit(names(prob_cmb), "&")
+  std_eff_names <- paste0(pmin(trimws(sapply(eff_splits, `[`, 1)),
+                               trimws(sapply(eff_splits, `[`, 2))), "&",
+                           pmax(trimws(sapply(eff_splits, `[`, 1)),
+                                trimws(sapply(eff_splits, `[`, 2))))
+  eff_df <- data.frame(plot_id  = std_eff_names,
+                        Efficacy = as.numeric(prob_cmb)) %>%
+    group_by(plot_id) %>%
+    summarise(Efficacy = mean(Efficacy, na.rm = TRUE), .groups = "drop")
+
+  plot_df <- inner_join(bio_df, eff_df, by = "plot_id") %>%
+    mutate(category = ifelse(plot_id %in% top5_combos, "Top 5 Hit", "Other"),
+           label    = ifelse(plot_id %in% top5_combos, gsub("&", " + ", plot_id), ""))
+
+  bg_df  <- plot_df %>% filter(category == "Other")
+  top_df <- plot_df %>% filter(category == "Top 5 Hit")
+
+  ggplot() +
+    geom_hline(yintercept = 0, linetype = "dashed", color = "grey60", linewidth = 0.8) +
+    # Basal range band — lower half only (mean down to −SD) to avoid stretching the Y axis
+    geom_rect(data = ctrl_band,
+              aes(xmin = x_lower, xmax = x_upper, ymin = y_lower, ymax = y_mean),
+              fill = COL_CONTROL, alpha = 0.25, color = NA) +
+    geom_segment(data = ctrl_band,
+                 aes(x = x_lower, xend = x_upper, y = y_mean, yend = y_mean),
+                 color = COL_CONTROL, linewidth = 1.5) +
+    annotate("text", x = ctrl_band$Efficacy, y = ctrl_band$y_mean,
+             label = "Basal", vjust = -0.4, fontface = "bold",
+             size = 4, color = COL_CONTROL) +
+    # IL-1β range band
+    geom_rect(data = dis_band,
+              aes(xmin = x_lower, xmax = x_upper, ymin = y_lower, ymax = y_upper),
+              fill = COL_DISEASE, alpha = 0.25, color = NA) +
+    geom_segment(data = dis_band,
+                 aes(x = x_lower, xend = x_upper, y = y_mean, yend = y_mean),
+                 color = COL_DISEASE, linewidth = 1.5) +
+    annotate("text", x = dis_band$Efficacy, y = dis_band$y_upper,
+             label = "IL-1β", vjust = -0.4, fontface = "bold",
+             size = 4, color = COL_DISEASE) +
+    # Background drug combinations
+    geom_point(data = bg_df, aes(x = Efficacy, y = Rescue_Index),
+               color = "grey70", size = 2.5, alpha = 0.6) +
+    # Top 5 hits
+    geom_point(data = top_df, aes(x = Efficacy, y = Rescue_Index, fill = plot_id),
+               shape = 21, size = 5, color = "black", stroke = 1.2) +
+    geom_text_repel(data = top_df,
+                    aes(x = Efficacy, y = Rescue_Index, label = label),
+                    box.padding = 1.2, point.padding = 0.5,
+                    fontface = "bold", size = 4.5, max.overlaps = Inf) +
+    scale_fill_npg() +
+    theme_classic(base_size = 14) +
+    labs(x = "ML Efficacy Score",
+         y = expression(Sigma * "Anabolic" ~ "-" ~ Sigma * "Catabolic")) +
+    theme(legend.position = "none",
+          axis.title       = element_text(face = "bold"),
+          plot.caption     = element_text(size = 9, color = "grey50"))
+}
+
+fig5e_ranges <- test_plot_biological_alignment_ranges(merged.sct, prob_cmb0.1_rf, top5_combos)
+ggsave(file.path(OUTPUT_MAIN, "Figure5e_test_ranges(1).pdf"),
+       plot = fig5e_ranges, width = 5, height = 5, dpi = 300)
+
+# =============================================================================
 # Figure 5f — Compact dot plot (Log2FC vs. disease, % expressing)
 # =============================================================================
 
@@ -334,11 +459,25 @@ ggsave(file.path(OUTPUT_MAIN, "Figure5e_biological_alignment.pdf"),
 #' @param top5_combos Character vector of top-5 combination names.
 #' @return A ggplot2 dot plot.
 #' @export
-plot_dotplot_log2fc <- function(seurat_obj, top5_combos) {
+plot_dotplot_log2fc <- function(seurat_obj, top5_combos,
+                                assay = "SCT",
+                                slot  = "data") {
 
-  # Compute state module scores if not present
-  if (!"State_Viability" %in% colnames(seurat_obj@meta.data)) {
-    seurat_obj <- compute_go_scores(seurat_obj, module_list = STATE_MODULES)
+  # Always recompute when a non-default slot is requested — cached column names
+  # do not encode which slot they came from, so stale values would silently persist.
+  if (slot != "data" || !"GO_Score1" %in% colnames(seurat_obj@meta.data)) {
+    seurat_obj <- compute_go_scores(seurat_obj, module_list = list(
+      GO_Score1 = GO_MODULES$Chondrocyte_Development,
+      GO_Score2 = GO_MODULES$Cartilage_Condensation,
+      GO_Score3 = GO_MODULES$Tissue_homeostasis,
+      GO_Score4 = GO_MODULES$NO_Synthase_Upregulation,
+      GO_Score5 = GO_MODULES$ECM_Disassembly,
+      GO_Score6 = GO_MODULES$Inflammatory_response
+    ), assay = assay, slot = slot)
+  }
+  if (slot != "data" || !"State_Viability" %in% colnames(seurat_obj@meta.data)) {
+    seurat_obj <- compute_go_scores(seurat_obj, module_list = STATE_MODULES,
+                                    assay = assay, slot = slot)
   }
 
   module_map <- c(
@@ -372,11 +511,14 @@ plot_dotplot_log2fc <- function(seurat_obj, top5_combos) {
               .groups = "drop") %>%
     group_by(module) %>%
     mutate(disease_baseline = mean_score[plot_group == "IL-1β"],
-           log2fc = log2((mean_score + PSEUDOCOUNT) / (disease_baseline + PSEUDOCOUNT))) %>%
+           effect = if (slot == "scale.data")
+             mean_score - disease_baseline
+           else
+             log2((mean_score + PSEUDOCOUNT) / (disease_baseline + PSEUDOCOUNT))) %>%
     ungroup() %>%
     filter(plot_group != "IL-1β") %>%
     mutate(
-      log2fc_capped = pmax(pmin(log2fc, LOG2FC_CAP), -LOG2FC_CAP),
+      effect_capped = pmax(pmin(effect, LOG2FC_CAP), -LOG2FC_CAP),
       plot_group = factor(plot_group, levels = c(top5_combos, "Control")),
       category = case_when(
         module %in% c("Inflammatory Response", "ECM Disassembly",
@@ -397,14 +539,19 @@ plot_dotplot_log2fc <- function(seurat_obj, top5_combos) {
   npg_red  <- PALETTE_NPG[1]
   npg_blue <- PALETTE_NPG[4]
 
+  fill_legend <- if (slot == "scale.data")
+    "Treatment Effect\n(Δ Residual vs. Disease)"
+  else
+    "Treatment Effect\n(Log₂FC vs. Disease)"
+
   ggplot(heat_df, aes(x = plot_group, y = module)) +
-    geom_point(aes(size = pct_expressed, fill = log2fc_capped),
+    geom_point(aes(size = pct_expressed, fill = effect_capped),
                shape = 21, color = "black", stroke = 0.6) +
     scale_size_continuous(name = "% Expressed", range = c(1, 7), limits = c(0, 100)) +
     scale_fill_gradient2(low = npg_blue, mid = "#F7F7F7", high = npg_red,
                          midpoint = 0, limits = c(-LOG2FC_CAP, LOG2FC_CAP),
                          oob = squish,
-                         name = "Treatment Effect\n(Log₂FC vs. Disease)") +
+                         name = fill_legend) +
     facet_grid(category ~ ., scales = "free_y", space = "free_y", switch = "y") +
     theme_minimal(base_size = 14) +
     theme(axis.text.x  = element_text(angle = 45, hjust = 1, face = "bold",
@@ -426,5 +573,9 @@ plot_dotplot_log2fc <- function(seurat_obj, top5_combos) {
 fig5f_dotplot <- plot_dotplot_log2fc(merged.sct, top5_combos)
 ggsave(file.path(OUTPUT_MAIN, "Figure5f_GO_dotplot.pdf"),
        plot = fig5f_dotplot, width = 6, height = 5, dpi = 300)
+
+fig5f_dotplot_scaled <- plot_dotplot_log2fc(merged.sct, top5_combos, slot = "scale.data")
+ggsave(file.path(OUTPUT_MAIN, "Figure5f_GO_dotplot_scale.data.pdf"),
+       plot = fig5f_dotplot_scaled, width = 6, height = 5, dpi = 300)
 
 save_session_info("figure5")

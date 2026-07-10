@@ -408,4 +408,315 @@ plot_radar_fast(mac_sin.sct, "ALK5 inhibitor IV_10", universal_scale,
 dev.off()
 par(old_par)
 
+# =============================================================================
+# Figure 4e (test) — Dot plot of 9 modules (6 GO + 3 cellular state),
+#                    Log2FC anchored to IL-1β — compare with radar charts above
+# =============================================================================
+
+#' Test: Dot Plot of GO + Cellular State Modules (Log2FC vs. IL-1β)
+#'
+#' Converts the figure 4e radar chart to a compact dot plot style analogous
+#' to plot_dotplot_log2fc in figure5.R, extended to all 9 modules anchored
+#' to IL-1β. Use alongside the radar charts above to compare representations.
+#'
+#' @param seurat_obj Merged Seurat object (e.g. mac_sin.sct).
+#' @param target_conditions Character vector of drug conditions to display.
+#' @param condition_labels Optional named character vector mapping condition
+#'   strings to display labels shown on the x-axis (e.g.
+#'   c(rapamycin_10 = "Rapamycin (10 μM)")).
+#' @param group_by Metadata column for condition (default "drug_condition").
+#' @param ref_control Healthy baseline label (default COND_CONTROL).
+#' @param ref_disease IL-1β anchor for Log2FC (default COND_DISEASE).
+#' @return A ggplot2 dot plot.
+#' @export
+test_plot_dotplot_log2fc_4e <- function(seurat_obj,
+                                         target_conditions,
+                                         condition_labels = NULL,
+                                         group_by         = "drug_condition",
+                                         ref_control      = COND_CONTROL,
+                                         ref_disease      = COND_DISEASE,
+                                         assay            = "SCT",
+                                         slot             = "data") {
+
+  # Always recompute when a non-default slot is requested — cached column names
+  # do not encode which slot they came from, so stale values would silently persist.
+  if (slot != "data" || !"GO_Score1" %in% colnames(seurat_obj@meta.data)) {
+    seurat_obj <- compute_go_scores(seurat_obj, module_list = list(
+      GO_Score1 = GO_MODULES$Chondrocyte_Development,
+      GO_Score2 = GO_MODULES$Cartilage_Condensation,
+      GO_Score3 = GO_MODULES$Tissue_homeostasis,
+      GO_Score4 = GO_MODULES$NO_Synthase_Upregulation,
+      GO_Score5 = GO_MODULES$ECM_Disassembly,
+      GO_Score6 = GO_MODULES$Inflammatory_response
+    ), assay = assay, slot = slot)
+  }
+  if (slot != "data" || !"State_Viability" %in% colnames(seurat_obj@meta.data)) {
+    seurat_obj <- compute_go_scores(seurat_obj, module_list = STATE_MODULES,
+                                    assay = assay, slot = slot)
+  }
+
+  module_map <- c(
+    GO_Score1       = "Chondrocyte Dev",
+    GO_Score2       = "Cartilage Condensation",
+    GO_Score3       = "Tissue Homeostasis",
+    GO_Score4       = "NO Synthase Upreg",
+    GO_Score5       = "ECM Disassembly",
+    GO_Score6       = "Inflammatory Response",
+    State_Prolif    = "Proliferation",
+    State_Viability = "Global Viability",
+    State_Stress    = "Cellular Stress"
+  )
+
+  all_conds <- c(ref_disease, target_conditions, ref_control)
+  meta <- seurat_obj@meta.data %>%
+    mutate(plot_group = .data[[group_by]]) %>%
+    filter(plot_group %in% all_conds)
+
+  heat_df <- meta %>%
+    select(plot_group, all_of(names(module_map))) %>%
+    pivot_longer(-plot_group, names_to = "raw_col", values_to = "score") %>%
+    mutate(module = module_map[raw_col]) %>%
+    group_by(plot_group, module) %>%
+    summarise(mean_score    = mean(score, na.rm = TRUE),
+              pct_expressed = mean(score > 0, na.rm = TRUE) * 100,
+              .groups = "drop") %>%
+    group_by(module) %>%
+    mutate(disease_baseline = mean_score[plot_group == ref_disease],
+           effect = if (slot == "scale.data")
+             mean_score - disease_baseline
+           else
+             log2((mean_score + PSEUDOCOUNT) / (disease_baseline + PSEUDOCOUNT))) %>%
+    ungroup() %>%
+    filter(plot_group != ref_disease) %>%
+    mutate(
+      effect_capped = pmax(pmin(effect, LOG2FC_CAP), -LOG2FC_CAP),
+      plot_group = factor(plot_group, levels = c(target_conditions, ref_control)),
+      category = case_when(
+        module %in% c("Inflammatory Response", "ECM Disassembly",
+                      "NO Synthase Upreg") ~ "Catabolic",
+        module %in% c("Tissue Homeostasis", "Cartilage Condensation",
+                      "Chondrocyte Dev") ~ "Anabolic",
+        TRUE ~ "Cellular State"
+      ),
+      category = factor(category, levels = c("Catabolic", "Anabolic", "Cellular State")),
+      module = factor(module,
+                      levels = rev(c("Inflammatory Response", "ECM Disassembly",
+                                     "NO Synthase Upreg", "Tissue Homeostasis",
+                                     "Cartilage Condensation", "Chondrocyte Dev",
+                                     "Proliferation", "Global Viability",
+                                     "Cellular Stress")))
+    )
+
+  npg_red  <- PALETTE_NPG[1]
+  npg_blue <- PALETTE_NPG[4]
+
+  fill_legend <- if (slot == "scale.data")
+    "Treatment Effect\n(Δ Residual vs. IL-1β)"
+  else
+    "Treatment Effect\n(Log₂FC vs. IL-1β)"
+
+  p <- ggplot(heat_df, aes(x = plot_group, y = module)) +
+    geom_point(aes(size = pct_expressed, fill = effect_capped),
+               shape = 21, color = "black", stroke = 0.6) +
+    scale_size_continuous(name = "% Expressed", range = c(1, 7), limits = c(0, 100)) +
+    scale_fill_gradient2(low = npg_blue, mid = "#F7F7F7", high = npg_red,
+                         midpoint = 0, limits = c(-LOG2FC_CAP, LOG2FC_CAP),
+                         oob = squish,
+                         name = fill_legend) +
+    facet_grid(category ~ ., scales = "free_y", space = "free_y", switch = "y") +
+    theme_minimal(base_size = 14) +
+    theme(axis.text.x       = element_text(angle = 45, hjust = 1, face = "bold",
+                                            color = "black"),
+          axis.text.y       = element_text(face = "bold", color = "black"),
+          axis.title        = element_blank(),
+          strip.placement   = "outside",
+          strip.background  = element_rect(fill = "grey90", color = "white"),
+          strip.text.y.left = element_text(angle = 90, face = "bold",
+                                            size = 11, color = "black"),
+          panel.grid.major  = element_line(color = "grey85", linewidth = 0.4),
+          panel.grid.minor  = element_blank(),
+          legend.position   = "right") +
+    guides(fill = guide_colorbar(frame.colour = "black", ticks.colour = "black",
+                                  barwidth = 0.8),
+           size = guide_legend(override.aes = list(fill = "black")))
+
+  if (!is.null(condition_labels)) {
+    p <- p + scale_x_discrete(labels = condition_labels)
+  }
+
+  p
+}
+
+fig4e_test_dotplot <- test_plot_dotplot_log2fc_4e(
+  mac_sin.sct, slot = "scale.data",
+  target_conditions = c("rapamycin_10", "ALK5 inhibitor IV_10"),
+  condition_labels  = c(
+    rapamycin_10           = "Rapamycin (10 μM)",
+    `ALK5 inhibitor IV_10` = "ALK5 Inhibitor (10 μM)",
+    control                = "Control"
+  )
+)
+ggsave(file.path(OUTPUT_MAIN, "Figure4e_test_dotplot_vs_radar(scale.data).pdf"),
+       plot = fig4e_test_dotplot, width = 6, height = 5.5, dpi = 300)
+
+# =============================================================================
+# Figure 4e (test 3) — Radar chart: 4 conditions, relative scale, optional
+#                       9-module layout (6 GO + 3 cellular state)
+# =============================================================================
+
+#' Test: 4-Condition Radar Chart with Relative Scale
+#'
+#' Overlays two drug conditions together with basal (control) and IL-1β
+#' (disease) in a single radar chart. Scale is computed relative to only
+#' these four conditions — no universal scale needed. Setting include_state
+#' TRUE adds the three STATE_MODULES axes (9 axes total) to test visual
+#' crowding against the 6-module baseline.
+#'
+#' @param seurat_obj A Seurat object containing all four conditions.
+#' @param target_conditions Character vector of exactly two drug condition strings.
+#' @param target_labels Optional named character vector mapping condition strings
+#'   to display labels (e.g. c(rapamycin_10 = "Rapamycin (10 μM)")).
+#' @param include_state Logical; if TRUE appends STATE_MODULES axes (9 total).
+#' @param module_list GO module list (default GO_MODULES from config).
+#' @param state_list Cellular-state module list (default STATE_MODULES from config).
+#' @param group_by Metadata column (default "drug_condition").
+#' @param ref_control Healthy baseline label (default COND_CONTROL).
+#' @param ref_disease Disease baseline label (default COND_DISEASE).
+#' @param assay Assay (default "SCT").
+#' @param slot Data slot (default "counts").
+#' @return NULL — draws to the active graphics device.
+#' @export
+test_plot_radar_relative <- function(seurat_obj,
+                                     target_conditions,
+                                     target_labels = NULL,
+                                     include_state = FALSE,
+                                     module_list   = GO_MODULES,
+                                     state_list    = STATE_MODULES,
+                                     group_by      = "drug_condition",
+                                     ref_control   = COND_CONTROL,
+                                     ref_disease   = COND_DISEASE,
+                                     assay         = "SCT",
+                                     slot          = "counts") {
+
+  if (length(target_conditions) != 2) stop("Provide exactly 2 target_conditions.")
+  all_conds <- c(ref_control, ref_disease, target_conditions)
+  missing   <- setdiff(all_conds, seurat_obj@meta.data[[group_by]])
+  if (length(missing) > 0) stop("Conditions not found in metadata: ",
+                                 paste(missing, collapse = ", "))
+
+  mods <- if (include_state) c(module_list, state_list) else module_list
+
+  if (include_state) {
+    mods <- mods[c("Chondrocyte_Development", "Cartilage_Condensation",
+                   "Tissue_homeostasis", "NO_Synthase_Upregulation",
+                   "Inflammatory_response", "ECM_Disassembly",
+                   "State_Stress", "State_Prolif", "State_Viability")]
+  }
+
+  # Shorten axis labels to reduce crowding at 9 axes
+  axis_labels <- gsub("_", "\n", names(mods))
+  if (include_state) {
+    axis_labels <- sub("Chondrocyte\nDevelopment",  "Chondro\nDev",   axis_labels)
+    axis_labels <- sub("Cartilage\nCondensation",   "Cart\nCond",     axis_labels)
+    axis_labels <- sub("Tissue\nhomeostasis",       "Tissue\nHomeo",  axis_labels)
+    axis_labels <- sub("NO\nSynthase\nUpregulation","NO\nSynth",      axis_labels)
+    axis_labels <- sub("Inflammatory\nresponse",    "Inflam\nResp",   axis_labels)
+    axis_labels <- sub("ECM\nDisassembly",          "ECM\nDis",       axis_labels)
+    axis_labels <- sub("State\nStress",             "Stress",         axis_labels)
+    axis_labels <- sub("State\nProlif",             "Prolif",         axis_labels)
+    axis_labels <- sub("State\nViability",          "Viability",      axis_labels)
+  }
+
+  DefaultAssay(seurat_obj) <- assay
+  mat  <- GetAssayData(seurat_obj, layer = slot)
+  meta <- seurat_obj@meta.data
+
+  get_metrics <- function(cond) {
+    cells <- rownames(meta[meta[[group_by]] == cond, ])
+    sapply(mods, function(genes) {
+      avail <- intersect(genes, rownames(mat))
+      if (length(avail) > 0) mean(rowMeans(mat[avail, cells, drop = FALSE])) else NA
+    })
+  }
+
+  # Scale is computed from all 4 conditions so panels are directly comparable
+  met <- t(sapply(all_conds, get_metrics))
+  rownames(met) <- all_conds
+
+  min_v <- apply(met, 2, min, na.rm = TRUE)
+  max_v <- apply(met, 2, max, na.rm = TRUE)
+  dif_v <- max_v - min_v
+  dif_v[dif_v == 0] <- 1
+  norm_df <- sweep(sweep(met, 2, min_v, "-"), 2, dif_v, "/")
+  colnames(norm_df) <- axis_labels
+
+  get_lbl <- function(cond) {
+    if (!is.null(target_labels) && cond %in% names(target_labels))
+      target_labels[[cond]]
+    else cond
+  }
+
+  drug_col  <- PALETTE_NPG[3]   # same color in both panels — drug stands out vs. grey refs
+  vlcex_val <- if (include_state) 0.72 else 0.88
+
+  # Draw one panel: Basal + IL-1β + a single drug condition
+  draw_panel <- function(drug_cond) {
+    panel_rows <- c(ref_control, ref_disease, drug_cond)
+    sub_norm   <- norm_df[panel_rows, , drop = FALSE]
+    plot_df    <- as.data.frame(rbind(rep(1, ncol(sub_norm)),
+                                       rep(0, ncol(sub_norm)),
+                                       sub_norm))
+    pcol  <- c(COL_CONTROL, COL_DISEASE, drug_col)
+    pfcol <- c(alpha(COL_CONTROL, 0.08), alpha(COL_DISEASE, 0.08),
+               alpha(drug_col,    0.35))
+    plwd  <- c(2, 2, 3)
+    plty  <- c(2, 2, 1)
+
+    radarchart(plot_df, axistype = 1,
+               pcol  = pcol, pfcol = pfcol,
+               plwd  = plwd, plty  = plty,
+               cglcol = "grey70", cglty = 1, axislabcol = "grey50",
+               caxislabels = c("Min", "25%", "50%", "75%", "Max"),
+               cglwd = 0.8, vlcex = vlcex_val,
+               title = get_lbl(drug_cond))
+
+    legend("topright",
+           legend = c("Basal", "IL-1β", get_lbl(drug_cond)),
+           col    = pcol, lty = plty, lwd = plwd,
+           pch = 20, pt.cex = 1.5, bty = "n", inset = c(-0.1, 0))
+  }
+
+  old_par <- par(no.readonly = TRUE)
+  on.exit(par(old_par))
+  par(mfrow = c(1, 2), mar = c(2, 2, 3, 6), xpd = TRUE)
+
+  draw_panel(target_conditions[1])
+  draw_panel(target_conditions[2])
+}
+
+# --- 6-module relative radar (two juxtaposed panels, shared relative scale) ---
+svglite(file.path(OUTPUT_MAIN, "Figure4e_test_radar_relative_6mod.svg"),
+        width = 12, height = 6)
+test_plot_radar_relative(
+  mac_sin.sct,
+  target_conditions = c("rapamycin_10", "ALK5 inhibitor IV_10"),
+  target_labels     = c(rapamycin_10           = "Rapamycin (10 μM)",
+                        `ALK5 inhibitor IV_10` = "ALK5 Inhib (10 μM)"),
+  slot = "scale.data"
+)
+dev.off()
+
+# --- 9-module relative radar (6 GO + 3 cellular state, two juxtaposed panels) ---
+svglite(file.path(OUTPUT_MAIN, "Figure4e_test_radar_relative_9mod.svg"),
+        width = 13, height = 6.5)
+test_plot_radar_relative(
+  mac_sin.sct,
+  target_conditions = c("rapamycin_10", "ALK5 inhibitor IV_10"),
+  target_labels     = c(rapamycin_10           = "Rapamycin (10 μM)",
+                        `ALK5 inhibitor IV_10` = "ALK5 Inhib (10 μM)"),
+  include_state     = TRUE,
+  slot = "scale.data"
+)
+dev.off()
+
 save_session_info("figure4")
