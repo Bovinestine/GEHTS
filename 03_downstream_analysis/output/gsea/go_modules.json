@@ -1,0 +1,13 @@
+{
+  "GO_MODULES": {
+    "Skeletal_System_Development": ["Acan", "Col2a1", "Col27a1", "Matn1", "Matn3", "Pth1r", "Ucma"],
+    "Chondrocyte_Development": ["Col27a1", "Matn1", "Sox9"],
+    "Chondrocyte_Differentiation": ["Col2a1", "Col27a1", "Matn1", "Pth1r", "Sox9"],
+    "ECM_Disassembly": ["Adamts5", "Mmp3", "Mmp13", "Il6"],
+    "Inflammatory_Response": ["Il6", "Mmp3", "Tlr2", "Tnfrsf1b"],
+    "Cell_Chemotaxis": ["Ccl2", "Cxcl1", "Cxcl5", "Il6"],
+    "Programmed_Cell_Death": ["Ccl2", "Gadd45g", "Igfbp3", "Il6", "Tnfrsf1b"]
+  },
+  "GO_ANABOLIC_TERMS": ["Skeletal_System_Development", "Chondrocyte_Development", "Chondrocyte_Differentiation"],
+  "GO_CATABOLIC_TERMS": ["ECM_Disassembly", "Inflammatory_Response", "Cell_Chemotaxis"]
+}

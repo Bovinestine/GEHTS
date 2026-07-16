@@ -1,0 +1,44 @@
+name: gehts
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.11
+  - r-base=4.4
+  - pip
+
+  # --- R packages (conda-forge) ---
+  - r-here
+  - r-dplyr
+  - r-ggplot2
+  - r-ggrepel
+  - r-ggsci
+  - r-cowplot
+  - r-gridextra
+  - r-viridis
+  - r-reshape2
+  - r-fmsb
+  - r-svglite
+  - r-scales
+  - r-tidyr
+  - r-pheatmap
+  - r-ggsignif
+  - r-jsonlite
+  - r-glmnet
+  - r-randomforest
+  - r-xgboost
+  - r-e1071
+  - r-kernlab
+  - r-caret
+  - r-metrics
+  - r-seurat
+  - r-spatstat.utils>=3.0.3
+
+  # --- Python packages ---
+  - pip:
+      - scanpy
+      - numpy
+      - matplotlib
+      - scipy
+      - pandas
+      - jupyter

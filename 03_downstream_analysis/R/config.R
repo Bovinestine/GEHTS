@@ -31,33 +31,35 @@ GENES_HOUSEKEEPING <- c(
 GENES_ALL <- c(GENES_ANABOLIC, GENES_CATABOLIC, GENES_HOUSEKEEPING)
 
 # -----------------------------------------------------------------------------
-# 2. GO module definitions (6 biological pathway gene sets)
+# 2. GO module definitions (8 gene sets, derived by fgsea from an external
+#    basal-vs-IL-1beta reference; see 03_downstream_analysis/output/gsea/)
 #    Used by: radar charts, trajectory plots, bubble plots, violin plots
+#
+#    Six modules are assigned to the anabolic/catabolic axes (GO_ANABOLIC_TERMS,
+#    GO_CATABOLIC_TERMS) used in 2D GO coordinate plots and the anabolic-minus-
+#    catabolic index. Programmed_Cell_Death is a state/triage module: displayed
+#    in every module figure but NOT assigned to either axis.
 # -----------------------------------------------------------------------------
 GO_MODULES <- list(
-  Chondrocyte_Development  = c("Matn1", "Acan", "Sox9", "Col27a1"),
-  Cartilage_Condensation   = c("Col2a1", "Acan", "Sox9"),
-  NO_Synthase_Upregulation = c("Tlr2", "Ccl2"),
-  ECM_Disassembly          = c("Adamts5", "Mmp13"),
-  Inflammatory_response    = c("Tlr2", "Ccl2", "Il17b", "Tnfrsf1b",
-                               "Cxcl1", "Il6", "Cxcl5", "Fosl2"),
-  Tissue_homeostasis       = c("Sox9", "Col2a1", "Pth1r", "Fosl2")
+  Skeletal_System_Development = c("Acan", "Col2a1", "Col27a1", "Matn1", "Matn3", "Pth1r", "Ucma"),
+  Chondrocyte_Development     = c("Col27a1", "Matn1", "Sox9"),
+  Chondrocyte_Differentiation = c("Col2a1", "Col27a1", "Matn1", "Pth1r", "Sox9"),
+  ECM_Disassembly             = c("Adamts5", "Mmp3", "Mmp13", "Il6"),
+  Inflammatory_Response       = c("Il6", "Mmp3", "Tlr2", "Tnfrsf1b"),
+  Cell_Chemotaxis             = c("Ccl2", "Cxcl1", "Cxcl5", "Il6"),
+  Programmed_Cell_Death       = c("Ccl2", "Gadd45g", "Igfbp3", "Il6", "Tnfrsf1b")
 )
 
-# Anabolic and catabolic axis membership for 2D GO coordinate plots
-GO_ANABOLIC_TERMS  <- c("Chondrocyte_Development",
-                         "Cartilage_Condensation",
-                         "Tissue_homeostasis")
-GO_CATABOLIC_TERMS <- c("NO_Synthase_Upregulation",
-                         "ECM_Disassembly",
-                         "Inflammatory_response")
 
-# Cellular state modules used in Figure 5f dot plot
-STATE_MODULES <- list(
-  State_Viability = c("Hprt", "Actb", "Gapdh", "B2m", "Ubc", "Ppia", "Rpl23"),
-  State_Stress    = c("Gadd45g", "Igfbp3"),
-  State_Prolif    = c("Ccnd3")
-)
+# Anabolic and catabolic axis membership for 2D GO coordinate plots.
+# Programmed_Cell_Death is intentionally excluded from both — it is a
+# state/triage module, displayed but not scored on either axis.
+GO_ANABOLIC_TERMS  <- c("Skeletal_System_Development",
+                         "Chondrocyte_Development",
+                         "Chondrocyte_Differentiation")
+GO_CATABOLIC_TERMS <- c("ECM_Disassembly",
+                         "Inflammatory_Response",
+                         "Cell_Chemotaxis")
 
 # -----------------------------------------------------------------------------
 # 3. Analysis parameters
@@ -67,6 +69,12 @@ LOG2FC_CAP  <- 3.0    # symmetric cap applied to Log2FC values in volcano/dot pl
 PSEUDOCOUNT <- 0.01   # added before log2 to avoid log(0)
 N_FOLDS_CV  <- 5      # number of cross-validation folds
 DOSE_LEVELS <- c(0.1, 10)  # μM doses screened
+
+# fgsea settings shared by every GSEA pipeline variant (gsea_panel_modules.R
+# and its external-DEG counterpart) so results stay directly comparable.
+GO_MINSIZE  <- 10      # fgsea: minimum gene set size after ranked-list overlap
+GO_MAXSIZE  <- 500     # fgsea: maximum gene set size after ranked-list overlap
+PADJ_CUTOFF <- 0.05    # fgsea: BH-adjusted p-value significance threshold
 
 # Baseline condition labels used consistently across all functions
 COND_CONTROL     <- "control"
@@ -79,7 +87,14 @@ DATA_DIR    <- here::here("Rdata", "pub")
 PRED_DIR    <- here::here("Rdata", "pub", "prediction")
 OUTPUT_MAIN <- here::here("03_downstream_analysis", "output", "main")
 OUTPUT_SUP  <- here::here("03_downstream_analysis", "output", "supplementary")
+OUTPUT_GSEA <- here::here("03_downstream_analysis", "output", "gsea")
+OUTPUT_TEST <- here::here("03_downstream_analysis", "output", "test")
 SESSION_DIR <- here::here("03_downstream_analysis", "session_info")
+
+# GO_MODULES exported as JSON so figure5g.ipynb (Python) reads the same
+# definitions instead of hand-copying them -- see export_go_modules_json()
+# below. Single source of truth: this file.
+GO_MODULES_JSON <- here::here("03_downstream_analysis", "output", "gsea", "go_modules.json")
 
 # CSV data file for Figure 1
 PLATFORM_CSV <- here::here("03_downstream_analysis",
@@ -87,6 +102,10 @@ PLATFORM_CSV <- here::here("03_downstream_analysis",
 
 # External reference RNA-seq
 SEBASTIAN_RDS <- here::here("RNA-seq", "macCtrl_sebastian.rds")
+
+# External DEG result (VST counts, near-genome-wide, NOT pre-filtered)
+EXTERNAL_DEG_VST_CSV <- here::here("Rdata", "pub",
+                                   "control vs il1b_GeneDifferential_vst_count.csv")
 
 # -----------------------------------------------------------------------------
 # 5. Color palettes
@@ -113,7 +132,7 @@ COL_CORNER      <- "#8da0cb"
 # 6. Helper: ensure output directories exist
 # -----------------------------------------------------------------------------
 .ensure_dirs <- function() {
-  dirs <- c(OUTPUT_MAIN, OUTPUT_SUP, SESSION_DIR)
+  dirs <- c(OUTPUT_MAIN, OUTPUT_SUP, OUTPUT_GSEA, SESSION_DIR)
   invisible(lapply(dirs, function(d) {
     if (!dir.exists(d)) dir.create(d, recursive = TRUE, showWarnings = FALSE)
   }))
@@ -121,7 +140,20 @@ COL_CORNER      <- "#8da0cb"
 .ensure_dirs()
 
 # -----------------------------------------------------------------------------
-# 7. Helper: save sessionInfo() to session_info/
+# 7. Export GO_MODULES as JSON (single source of truth for figure5g.ipynb)
+# -----------------------------------------------------------------------------
+export_go_modules_json <- function() {
+  jsonlite::write_json(
+    list(GO_MODULES         = GO_MODULES,
+         GO_ANABOLIC_TERMS  = GO_ANABOLIC_TERMS,
+         GO_CATABOLIC_TERMS = GO_CATABOLIC_TERMS),
+    GO_MODULES_JSON, auto_unbox = TRUE, pretty = TRUE
+  )
+}
+export_go_modules_json()
+
+# -----------------------------------------------------------------------------
+# 8. Helper: save sessionInfo() to session_info/
 # -----------------------------------------------------------------------------
 save_session_info <- function(script_name) {
   out_file <- file.path(SESSION_DIR,

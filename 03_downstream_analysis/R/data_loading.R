@@ -36,6 +36,7 @@ library(SeuratDisk)
 .load_rdata(file.path(DATA_DIR, "seurat_sin.pub.Rdata"), "sin.pub - single-drug screen (raw)")
 .load_rdata(file.path(DATA_DIR, "seurat_cmb.pub.Rdata"), "cmb.pub - combo-drug screen (raw)")
 .load_rdata(file.path(DATA_DIR, "seurat_rna.pub.Rdata"), "rna.pub - bulk RNA-seq (raw)")
+.load_rdata(file.path(DATA_DIR, "seurat_rna.ref.Rdata"), "rna.ref - bulk RNA-seq (raw)")
 
 # -----------------------------------------------------------------------------
 # 2. SCTransform-normalized Seurat objects
@@ -63,9 +64,9 @@ if (!is.null(macSebastian)) {
 # -----------------------------------------------------------------------------
 # 4. ML efficacy predictions (Random Forest, dose 0.1 and 10 uM)
 # -----------------------------------------------------------------------------
-.load_rdata(file.path(PRED_DIR, "prob_sng10_rf.Rdata"),  "pred_single_10  - RF predictions, single drug, 10 uM")
-.load_rdata(file.path(PRED_DIR, "prob_sng0.1_rf.Rdata"), "pred_single_0.1 - RF predictions, single drug, 0.1 uM")
-.load_rdata(file.path(PRED_DIR, "prob_cmb0.1_rf.Rdata"), "pred_combo_0.1  - RF predictions, combo, 0.1 uM")
+.load_rdata(file.path(PRED_DIR, "pred_single_10_rf.Rdata"),  "pred_single_10  - RF predictions, single drug, 10 uM")
+.load_rdata(file.path(PRED_DIR, "pred_single_0.1_rf.Rdata"), "pred_single_0.1 - RF predictions, single drug, 0.1 uM")
+.load_rdata(file.path(PRED_DIR, "pred_combo_0.1_rf.Rdata"), "pred_combo_0.1  - RF predictions, combo, 0.1 uM")
 
 # -----------------------------------------------------------------------------
 # 5. Trained prediction models
@@ -75,10 +76,5 @@ rf_model  <- .load_rds(file.path(PRED_DIR, "Random_forest_model.rds"), "rf_model
 xgb_model <- .load_rds(file.path(PRED_DIR, "XGBoost_model.rds"),      "xgb_model - XGBoost")
 svr_model <- .load_rds(file.path(PRED_DIR, "SVR_model.rds"),          "svr_model - SVR")
 gpr_model <- .load_rds(file.path(PRED_DIR, "GPR_model.rds"),          "gpr_model - GPR")
-
-# -----------------------------------------------------------------------------
-# 6. Universal radar chart scale (pre-computed for Figure 4e)
-# -----------------------------------------------------------------------------
-.load_rdata(file.path(DATA_DIR, "uni_scale.Rdata"), "uni_scale - universal radar chart scale")
 
 message("\nData loading complete.")

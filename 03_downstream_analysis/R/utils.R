@@ -239,6 +239,160 @@ compute_go_scores <- function(seurat_obj,
 }
 
 # -----------------------------------------------------------------------------
+# 3b. Residual-based module scoring and dot plot (Figures 4e, 5f)
+#
+# Module scores here use SCT scale.data (Pearson residuals), not the
+# log-normalized "data" slot: residuals are centered near zero and go
+# negative, so plot_dotplot_diff()'s encoding (diverging color = plain
+# baseline difference, not log2FC) is built around that. LOG2FC_CAP and
+# PSEUDOCOUNT do not apply here -- they remain gene-level volcano-only.
+# -----------------------------------------------------------------------------
+
+#' Classify Modules As Anabolic / Catabolic / State
+#'
+#' @param module_names Character vector of module names (e.g. names(GO_MODULES)).
+#' @param anabolic_terms,catabolic_terms Axis membership (default: config.R's
+#'   GO_ANABOLIC_TERMS/GO_CATABOLIC_TERMS). Modules in neither are "State"
+#'   (displayed, but not assigned to either axis -- e.g. Programmed_Cell_Death).
+#' @return Character vector, same length as module_names.
+#' @export
+.module_category <- function(module_names,
+                             anabolic_terms  = GO_ANABOLIC_TERMS,
+                             catabolic_terms = GO_CATABOLIC_TERMS) {
+  ifelse(module_names %in% anabolic_terms, "Anabolic",
+    ifelse(module_names %in% catabolic_terms, "Catabolic", "State"))
+}
+
+#' Per-Cell Module Scores, Long Format
+#'
+#' One long data frame of per-cell module scores (mean of member-gene SCT
+#' residuals). plot_dotplot_diff() derives its group means (color) and
+#' per-well significance test (size) from this same table.
+#'
+#' @param seurat_obj A Seurat object.
+#' @param conditions Character vector of condition labels to include.
+#' @param module_list Named list of gene modules (default: GO_MODULES).
+#' @param group_by Metadata column with condition labels (default "drug_condition").
+#' @param assay,slot Assay/slot to score from (default "SCT"/"scale.data").
+#' @return A long data.frame: Condition, Module, Score (one row per cell x module).
+#' @export
+compute_module_scores_long <- function(seurat_obj, conditions,
+                                       module_list = GO_MODULES,
+                                       group_by    = "drug_condition",
+                                       assay       = "SCT",
+                                       slot        = "scale.data") {
+  scored <- compute_go_scores(seurat_obj, module_list = module_list, assay = assay, slot = slot)
+  meta   <- scored@meta.data
+  meta   <- meta[meta[[group_by]] %in% conditions, , drop = FALSE]
+  do.call(rbind, lapply(names(module_list), function(m) {
+    data.frame(Condition = meta[[group_by]], Module = m, Score = meta[[m]],
+               stringsAsFactors = FALSE)
+  }))
+}
+
+#' Compact Dot Plot: Diff-From-Baseline Color + Significance Size
+#'
+#' Dot color is the plain difference of module residual means from the
+#' ref_disease baseline (diverging, centered at 0) -- residual scores go
+#' negative, so a log2FC or "% cells > 0" encoding (as used pre-residual)
+#' is invalid/uninformative here. Dot size is significance of that shift: a
+#' two-sided Wilcoxon rank-sum test of each condition's per-well module
+#' scores against the baseline's per-well scores, BH-adjusted across every
+#' condition x module cell, mapped as -log10(padj).
+#'
+#' @param seurat_obj A Seurat object.
+#' @param plot_conditions Character vector of condition labels to display (baseline excluded).
+#' @param condition_labels Optional named character vector of display labels.
+#' @param module_list Named list of gene modules (default: GO_MODULES).
+#' @param group_by Metadata column (default "drug_condition").
+#' @param ref_disease Baseline condition subtracted for the diff (default COND_DISEASE).
+#' @param assay,slot Assay/slot to score from (default "SCT"/"scale.data").
+#' @return A ggplot2 object.
+#' @export
+plot_dotplot_diff <- function(seurat_obj,
+                              plot_conditions,
+                              condition_labels = NULL,
+                              module_list      = GO_MODULES,
+                              group_by         = "drug_condition",
+                              ref_disease      = COND_DISEASE,
+                              assay            = "SCT",
+                              slot             = "scale.data") {
+  all_conds <- c(ref_disease, plot_conditions)
+  long <- compute_module_scores_long(seurat_obj, all_conds, module_list, group_by, assay, slot)
+
+  df <- long %>%
+    group_by(Condition, Module) %>%
+    summarise(Score = mean(Score, na.rm = TRUE), .groups = "drop") %>%
+    group_by(Module) %>%
+    mutate(disease_baseline = Score[Condition == ref_disease],
+           diff             = Score - disease_baseline) %>%
+    ungroup() %>%
+    filter(Condition != ref_disease)
+
+  # Dot size = significance of the per-well module shift vs. the baseline
+  # (Wilcoxon rank-sum, BH-adjusted across all condition x module cells).
+  # Wells from the same drug/combo are not independent draws (shared
+  # plate/batch), so this is a descriptive well-level test, not a mixed-model
+  # inference that accounts for well-level correlation.
+  PADJ_FLOOR <- 1e-6  # caps -log10(padj) at 6 so one tiny p-value can't blow out the size scale
+  sig_grid <- expand.grid(Condition = plot_conditions, Module = names(module_list),
+                          stringsAsFactors = FALSE)
+  sig_grid$p_raw <- mapply(function(cond, mod) {
+    x <- long$Score[long$Condition == cond & long$Module == mod]
+    y <- long$Score[long$Condition == ref_disease & long$Module == mod]
+    if (length(x) < 2 || length(y) < 2) return(NA_real_)
+    suppressWarnings(wilcox.test(x, y, alternative = "two.sided")$p.value)
+  }, sig_grid$Condition, sig_grid$Module, USE.NAMES = FALSE)
+  sig_grid$padj <- p.adjust(sig_grid$p_raw, method = "BH")
+  sig_grid$padj[is.na(sig_grid$padj)] <- 1  # untestable cells (< 2 wells) render as smallest/non-significant
+  sig_grid$neglog10_padj <- -log10(pmax(sig_grid$padj, PADJ_FLOOR))
+
+  cat(sprintf("Dot plot significance sizing: adjusted p-value range = [%.2e, %.2e] across %d condition x module cells\n",
+              min(sig_grid$padj), max(sig_grid$padj), nrow(sig_grid)))
+
+  df <- df %>%
+    left_join(sig_grid, by = c("Condition", "Module")) %>%
+    mutate(
+      Category = factor(.module_category(as.character(Module)),
+                        levels = c("Anabolic", "Catabolic", "State")),
+      Module   = factor(Module, levels = rev(names(module_list))),
+      Condition = factor(Condition, levels = plot_conditions)
+    )
+  if (!is.null(condition_labels)) {
+    df <- df %>% mutate(Condition = factor(condition_labels[as.character(Condition)],
+                                           levels = unname(condition_labels[plot_conditions])))
+  }
+
+  lim <- max(abs(df$diff), na.rm = TRUE)
+  npg_red  <- PALETTE_NPG[1]
+  npg_blue <- PALETTE_NPG[4]
+
+  ggplot(df, aes(x = Condition, y = Module)) +
+    geom_point(aes(size = neglog10_padj, fill = diff), shape = 21, color = "black", stroke = 0.6) +
+    scale_size_continuous(name = "Adj. p-value\n(Wilcoxon, BH)", range = c(2, 10),
+                          limits = c(0, -log10(PADJ_FLOOR)),
+                          breaks = -log10(c(0.05, 0.01, 0.001)),
+                          labels = c("0.05", "0.01", "0.001")) +
+    scale_fill_gradient2(low = npg_blue, mid = "#F7F7F7", high = npg_red,
+                         midpoint = 0, limits = c(-lim, lim),
+                         name = "Diff. residual mean\nvs. IL-1β") +
+    facet_grid(Category ~ ., scales = "free_y", space = "free_y", switch = "y") +
+    theme_minimal(base_size = 14) +
+    labs(caption = "Dot size: well-level Wilcoxon rank-sum vs. IL-1β, BH-adjusted — wells are not fully independent, so this is descriptive, not a mixed-model inference.") +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1, face = "bold", color = "black"),
+          axis.text.y = element_text(face = "bold", color = "black"),
+          axis.title  = element_blank(),
+          plot.caption = element_text(size = 7, color = "grey40", hjust = 0),
+          strip.placement   = "outside",
+          strip.background  = element_rect(fill = "grey90", color = "white"),
+          strip.text.y.left = element_text(angle = 90, face = "bold", size = 11, color = "black"),
+          panel.grid.major  = element_line(color = "grey85", linewidth = 0.4),
+          panel.grid.minor  = element_blank(),
+          legend.position   = "right") +
+    guides(fill = guide_colorbar(frame.colour = "black", ticks.colour = "black", barwidth = 0.8))
+}
+
+# -----------------------------------------------------------------------------
 # 4. Bliss synergy helpers (Figures 4c, 5d)
 # -----------------------------------------------------------------------------
 
@@ -404,53 +558,6 @@ draw_boxplots_for_genes_with_common_legend <- function(
 }
 
 # -----------------------------------------------------------------------------
-# 6. Radar chart scale calculator (Figure 4e)
-# -----------------------------------------------------------------------------
-
-#' Calculate Universal Radar Chart Scale Across All Conditions
-#'
-#' Scans every condition in the Seurat object to find the absolute min/max
-#' expression per GO module, so all radar charts share an identical axis scale.
-#'
-#' @param seurat_obj A Seurat object.
-#' @param module_list Named list of gene modules (default: GO_MODULES from config).
-#' @param group_by Metadata column containing conditions (default "drug_condition").
-#' @param assay Assay name (default "SCT").
-#' @param slot Slot name (default "counts").
-#' @return A list with elements `min` and `max` (named numeric vectors).
-#' @export
-calculate_radar_scale <- function(seurat_obj,
-                                  module_list = GO_MODULES,
-                                  group_by    = "drug_condition",
-                                  assay       = "SCT",
-                                  slot        = "counts") {
-
-  if (!inherits(seurat_obj, "Seurat")) stop("'seurat_obj' must be a Seurat object.")
-  if (!group_by %in% colnames(seurat_obj@meta.data)) {
-    stop("Column '", group_by, "' not found in metadata.")
-  }
-
-  DefaultAssay(seurat_obj) <- assay
-  mat  <- GetAssayData(seurat_obj, layer = slot)
-  meta <- seurat_obj@meta.data
-
-  all_metrics <- lapply(unique(meta[[group_by]]), function(cond) {
-    cells <- rownames(meta[meta[[group_by]] == cond, ])
-    if (length(cells) == 0) return(NULL)
-    sapply(module_list, function(genes) {
-      avail <- intersect(genes, rownames(mat))
-      if (length(avail) > 0) mean(rowMeans(mat[avail, cells, drop = FALSE])) else NA
-    })
-  })
-  all_metrics <- do.call(rbind, Filter(Negate(is.null), all_metrics))
-
-  list(
-    min = apply(all_metrics, 2, min, na.rm = TRUE),
-    max = apply(all_metrics, 2, max, na.rm = TRUE)
-  )
-}
-
-# -----------------------------------------------------------------------------
 # 6. Per-drug highlighted UMAP grid (Figures 4d, Extended Data)
 # -----------------------------------------------------------------------------
 
@@ -490,4 +597,150 @@ plot_highlighted_umaps <- function(seurat_obj,
   grid.arrange(grobs = to_print, ncol = ncol)
   dev.off()
   invisible(output_pdf)
+}
+
+# -----------------------------------------------------------------------------
+# 7. GSEA-derived panel module helpers (gsea_panel_modules.R and variants)
+# -----------------------------------------------------------------------------
+
+#' Convert a GOBP_* msigdbr term name into a config.R-style module name
+#'
+#' @param term A msigdbr gs_name, e.g. "GOBP_INFLAMMATORY_RESPONSE".
+#' @return A syntactically valid, Title_Case_With_Underscores name.
+#' @export
+clean_go_module_name <- function(term) {
+  nm    <- sub("^GOBP_", "", term)
+  words <- strsplit(nm, "_")[[1]]
+  words <- paste0(toupper(substr(words, 1, 1)), tolower(substr(words, 2, nchar(words))))
+  make.names(paste(words, collapse = "_"))
+}
+
+#' Write a named list of gene vectors as a config.R-style GO module source file
+#'
+#' @param module_list Named list of character vectors (gene symbols).
+#' @param out_path Destination .R file path.
+#' @param list_name Name of the list object to define (e.g. "GO_MODULES_FROM_GSEA").
+#' @param header_lines Extra character vector of "#"-prefixed lines describing
+#'   provenance (e.g. source script, filter thresholds, counts); inserted
+#'   into the file's header comment block.
+#' @return Invisibly, out_path.
+#' @export
+write_go_modules_file <- function(module_list, out_path, list_name, header_lines = character(0)) {
+  header <- c(
+    "# =============================================================================",
+    paste0("# ", basename(out_path), " -- Panel modules from GSEA leading-edge genes"),
+    "#",
+    "# Auto-generated -- do not hand-edit; re-run the analysis script to regenerate.",
+    "#",
+    header_lines,
+    "#",
+    paste0("# Generated: ", format(Sys.time(), "%Y-%m-%d %H:%M:%S")),
+    "# ============================================================================="
+  )
+
+  if (length(module_list) == 0) {
+    body <- paste0(list_name, " <- list()")
+  } else {
+    name_width <- max(nchar(names(module_list)))
+    entries <- vapply(seq_along(module_list), function(i) {
+      genes     <- module_list[[i]]
+      genes_str <- paste(sprintf('"%s"', genes), collapse = ", ")
+      sprintf("  %-*s = c(%s)", name_width, names(module_list)[i], genes_str)
+    }, character(1))
+    body <- paste0(list_name, " <- list(\n", paste(entries, collapse = ",\n"), "\n)")
+  }
+
+  writeLines(c(header, "", body), out_path)
+  invisible(out_path)
+}
+
+# -----------------------------------------------------------------------------
+# 8. Shared fgsea + panel-overlap runner (gsea_panel_modules.R and variants)
+# -----------------------------------------------------------------------------
+
+#' Run fgsea Multilevel Against Mouse GO:BP and Extract Panel Modules
+#'
+#' Fetches mouse GO Biological Process gene sets (msigdbr, C5/GO:BP), runs
+#' fgsea::fgseaMultilevel() on a pre-ranked vector, filters to BH-significant
+#' terms, and -- for each significant term -- intersects its leading-edge
+#' genes with the panel, dropping terms with no panel overlap. Does not load
+#' the msigdbr/fgsea/BiocParallel namespaces itself; the calling script must
+#' have them installed (library() them for interactive convenience if wanted).
+#'
+#' @param ranks Named numeric vector (gene symbol -> ranking statistic),
+#'   sorted descending, used as the fgsea input.
+#' @param genes_all Character vector of panel genes (default: GENES_ALL).
+#' @param min_size,max_size,padj_cutoff,seed fgsea settings (default: the
+#'   shared GO_MINSIZE/GO_MAXSIZE/PADJ_CUTOFF/SEED constants from config.R).
+#' @return A list: go_bp_sets (raw msigdbr table, for version/provenance
+#'   metadata), go_bp_list (all tested pathways), fgsea_res (full fgsea
+#'   output), sig_res (BH-significant terms, with panel_overlap_full/
+#'   panel_overlap_leadingedge string columns added), panel_res (sig_res
+#'   further filtered to non-empty leading-edge panel overlap), panel_modules
+#'   (named list of leading-edge-panel gene vectors, config.R-style),
+#'   n_pathways_tested, n_significant, n_panel_overlap.
+#' @export
+run_gsea_panel_analysis <- function(ranks,
+                                    genes_all   = GENES_ALL,
+                                    min_size    = GO_MINSIZE,
+                                    max_size    = GO_MAXSIZE,
+                                    padj_cutoff = PADJ_CUTOFF,
+                                    seed        = SEED) {
+  go_bp_sets <- msigdbr::msigdbr(species = "Mus musculus", collection = "C5",
+                                 subcollection = "GO:BP")
+  stopifnot("msigdbr returned no GO:BP gene sets" = nrow(go_bp_sets) > 0)
+  go_bp_list <- lapply(split(go_bp_sets$gene_symbol, go_bp_sets$gs_name), unique)
+
+  # A single-threaded backend is required for set.seed() to make fgseaMultilevel
+  # fully reproducible -- parallel workers can shuffle which RNG stream handles
+  # which pathway, silently breaking exact reproducibility even with a fixed seed.
+  set.seed(seed)
+  fgsea_res <- as.data.frame(fgsea::fgseaMultilevel(
+    pathways = go_bp_list,
+    stats    = ranks,
+    minSize  = min_size,
+    maxSize  = max_size,
+    eps      = 0,
+    BPPARAM  = BiocParallel::SerialParam()
+  ))
+
+  n_pathways_tested <- nrow(fgsea_res)
+  sig_res <- fgsea_res[!is.na(fgsea_res$padj) & fgsea_res$padj < padj_cutoff, ]
+  sig_res <- sig_res[order(sig_res$padj), ]
+  n_significant <- nrow(sig_res)
+
+  if (n_significant == 0) {
+    sig_res$panel_overlap_full        <- character(0)
+    sig_res$panel_overlap_leadingedge <- character(0)
+    panel_res     <- sig_res
+    panel_modules <- list()
+  } else {
+    overlap_full <- lapply(sig_res$pathway, function(term) sort(intersect(go_bp_list[[term]], genes_all)))
+    overlap_le   <- lapply(seq_len(nrow(sig_res)), function(i) sort(intersect(sig_res$leadingEdge[[i]], genes_all)))
+
+    sig_res$panel_overlap_full        <- vapply(overlap_full, paste, character(1), collapse = "; ")
+    sig_res$panel_overlap_leadingedge <- vapply(overlap_le,   paste, character(1), collapse = "; ")
+
+    # A term is dropped if its leading edge has no panel overlap. leadingEdge
+    # is always a subset of full term membership, so a non-empty leading-edge
+    # overlap guarantees a non-empty full-membership one.
+    keep_panel <- lengths(overlap_le) > 0
+    panel_res  <- sig_res[keep_panel, ]
+    panel_le   <- overlap_le[keep_panel]
+
+    module_names  <- make.unique(vapply(panel_res$pathway, clean_go_module_name, character(1)), sep = "_")
+    panel_modules <- setNames(panel_le, module_names)
+  }
+
+  list(
+    go_bp_sets        = go_bp_sets,
+    go_bp_list        = go_bp_list,
+    fgsea_res         = fgsea_res,
+    sig_res           = sig_res,
+    panel_res         = panel_res,
+    panel_modules     = panel_modules,
+    n_pathways_tested = n_pathways_tested,
+    n_significant     = n_significant,
+    n_panel_overlap   = nrow(panel_res)
+  )
 }

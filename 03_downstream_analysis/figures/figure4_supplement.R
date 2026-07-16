@@ -49,7 +49,7 @@ ggsave(file.path(OUTPUT_SUP, "Sfig_cv_comparison.pdf"),
        plot = sfig_cv, width = 10, height = 6, dpi = 300)
 
 # =============================================================================
-# Extended Data — 6-panel GO module violin plots
+# Extended Data — GO module violin plots (one panel per GO_MODULES entry)
 # =============================================================================
 
 merged.sct <- merge(mac.sct, sin.sct)
@@ -92,21 +92,23 @@ plot_supplementary_violins <- function(seurat_obj,
   base_cols   <- PALETTE_NPG[c(2, 1, 3, 8, 5, 9)]
   cond_colors <- setNames(base_cols[seq_along(plot_labels)], plot_labels)
 
+  y_lab <- if (slot == "scale.data") "Mean SCT Pearson residual" else "Mean Gene Expression (SCT)"
+
   ggplot(df_long, aes(x = Condition_Clean, y = Score, fill = Condition_Clean)) +
     geom_violin(trim = TRUE, alpha = 0.8, scale = "width",
                 color = "black", linewidth = 0.5) +
     geom_boxplot(width = 0.15, fill = "white", color = "black",
                  outlier.shape = NA, linewidth = 0.5, alpha = 0.8) +
-    facet_wrap(~Module, scales = "free_y", ncol = 3) +
+    facet_wrap(~Module, scales = "free_y", ncol = 4) +
     scale_fill_manual(values = cond_colors) +
     theme_bw() +
-    labs(title = "GO Module Distributions", x = "", y = "Mean Gene Expression (SCT)") +
+    labs(title = "GO Module Distributions", x = "", y = y_lab) +
     theme(legend.position = "none",
           axis.text.x      = element_text(angle = 45, hjust = 1, face = "bold",
                                           size = 11, color = "black"),
           axis.text.y      = element_text(size = 10, color = "black"),
           axis.title.y     = element_text(face = "bold", size = 12,
-                                          margin = margin(r = 10)),
+                                          margin = ggplot2::margin(r = 10)),
           plot.title       = element_text(face = "bold", size = 14, hjust = 0.5),
           strip.background = element_rect(fill = "grey90", color = "black"),
           strip.text       = element_text(face = "bold", size = 10),
@@ -117,9 +119,10 @@ plot_supplementary_violins <- function(seurat_obj,
 sfig_violin <- plot_supplementary_violins(
   merged.sct,
   target_conditions = c("rapamycin_10", "ALK5 inhibitor IV_10"),
-  target_labels     = c("Rapamycin (10 μM)", "ALK5 Inhibitor (10 μM)")
+  target_labels     = c("Rapamycin (10 μM)", "ALK5 Inhibitor (10 μM)"),
+  slot              = "scale.data"
 )
 ggsave(file.path(OUTPUT_SUP, "Sfig_GO_module_violins.pdf"),
-       plot = sfig_violin, width = 7, height = 5.5, dpi = 300)
+       plot = sfig_violin, width = 9, height = 6, dpi = 300)
 
 save_session_info("figure4_supplement")
