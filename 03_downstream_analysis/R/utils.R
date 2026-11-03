@@ -204,6 +204,83 @@ plot_dim_reduction <- function(seurat_object,
 }
 
 # -----------------------------------------------------------------------------
+# 2b. Lollipop chart: transcriptomic divergence vs. ATDC5 (Figure 2f and its
+#     rna.pub-vs-ATDC5 supplementary companion in figure2_supplement.R)
+# -----------------------------------------------------------------------------
+
+#' Lollipop Chart: Transcriptomic Divergence Primary vs. ATDC5
+#'
+#' @param norm_primary CLR-normalized expression matrix for the primary
+#'   platform (genes x samples/cells) -- e.g. mac.sct (Fig. 2f) or rna.pub
+#'   (supplementary).
+#' @param norm_atdc5 CLR-normalized expression matrix for ATDC5 (genes x samples).
+#' @param target_genes Genes to display.
+#' @return A ggplot2 object.
+#' @export
+plot_gene_divergence <- function(norm_primary, norm_atdc5,
+                                 target_genes = c("Col2a1", "Acan", "Matn3",
+                                                  "Gadd45g", "Ccnd3", "Il6",
+                                                  "Ccl2", "Cxcl1", "Tlr2",
+                                                  "Rpl23")) {
+
+  # Indexed by gene name (not positional): norm_primary and norm_atdc5 may
+  # come from different platforms with different gene universes/ordering, so
+  # a plain `rowMeans(a) - rowMeans(b)` would silently misalign/recycle.
+  mean_primary <- rowMeans(norm_primary, na.rm = TRUE)
+  mean_atdc5   <- rowMeans(norm_atdc5,   na.rm = TRUE)
+  diff_vals <- mean_primary[target_genes] - mean_atdc5[target_genes]
+  names(diff_vals) <- target_genes
+
+  plot_data <- data.frame(Gene       = target_genes,
+                          Difference = as.numeric(diff_vals[target_genes])) %>%
+    na.omit() %>%
+    mutate(Category = case_when(
+      Gene %in% c("Col2a1", "Acan", "Matn3") ~ "Matrix Identity",
+      Gene == "Gadd45g"                       ~ "Quiescence",
+      Gene %in% c("Il6", "Ccl2", "Cxcl1", "Tlr2") ~ "Inflammation",
+      Gene == "Ccnd3"                         ~ "Cell Cycle",
+      Gene == "Rpl23"                         ~ "Metabolism",
+      TRUE ~ "Other"
+    )) %>%
+    arrange(Difference) %>%
+    mutate(Gene = factor(Gene, levels = Gene))
+
+  category_colors <- c("Matrix Identity" = "#00A087",
+                        "Quiescence"       = "#8491B4",
+                        "Inflammation"     = "#F39B7F",
+                        "Cell Cycle"     = "#C87A9E",
+                        "Metabolism"       = "#919C4A")
+
+  y_max <- max(plot_data$Difference)
+  y_min <- min(plot_data$Difference)
+  n     <- nrow(plot_data)
+
+  ggplot(plot_data, aes(x = Gene, y = Difference, color = Category)) +
+    geom_hline(yintercept = 0, color = "black", linewidth = 0.6) +
+    geom_segment(aes(xend = Gene, y = 0, yend = Difference), linewidth = 1.2) +
+    geom_point(size = 4.5) +
+    annotate("text", x = n - 1, y = y_max * 0.85,
+             label = "Enriched in\nPRIMARY", color = "grey30",
+             fontface = "bold", hjust = 1, size = 4) +
+    annotate("text", x = 2, y = y_min * 0.85,
+             label = "Enriched in\nATDC5", color = "grey30",
+             fontface = "bold", hjust = 0, size = 4) +
+    coord_flip() +
+    scale_color_manual(values = category_colors) +
+    theme_classic() +
+    labs(y     = "Relative Enrichment (Primary − ATDC5, CLR Normalized)",
+         x     = NULL,
+         title = "Transcriptomic Divergence: Primary vs. ATDC5") +
+    theme(legend.position  = "right",
+          legend.title     = element_blank(),
+          axis.text.y      = element_text(size = 11, face = "bold.italic",
+                                          color = "black"),
+          axis.text.x      = element_text(size = 10, color = "black"),
+          axis.title.x     = element_text(size = 11, face = "bold",
+                                          margin = margin(t = 10)))
+}
+
+# -----------------------------------------------------------------------------
 # 3. GO module score calculator (Figures 4e, 5e, 5f)
 # -----------------------------------------------------------------------------
 
@@ -393,6 +470,220 @@ plot_dotplot_diff <- function(seurat_obj,
 }
 
 # -----------------------------------------------------------------------------
+# 3c. Radar chart: GO module scores, drug-relative scale (Figure 4e)
+#
+# Unlike plot_dotplot_diff() (universal residual scale across the full drug
+# screen), this radar chart rescales each module axis to [0, 1] using ONLY
+# the min/max across the conditions actually drawn -- basal, IL-1beta, and
+# the selected drugs -- not a universal scale over the whole library (that
+# was the old archived approach, see archive/figure4.obsolete.r). A relative
+# scale keeps the polygon shape legible for a small, targeted comparison
+# instead of compressing it against drugs that are not shown.
+# -----------------------------------------------------------------------------
+
+#' Shared Prep: [0,1]-Normalized Module-Score Table For Radar Charts
+#'
+#' Internal helper factored out of plot_radar_module_scores() /
+#' plot_radar_module_scores_split() so both draw from an identical
+#' relative-scale table (rows: "max", "min", ref_control, ref_disease,
+#' drug_conditions; columns: modules, axis-ordered anabolic/catabolic/state).
+#' @noRd
+.prep_radar_plot_df <- function(seurat_obj, drug_conditions, module_list, group_by,
+                                ref_control, ref_disease, assay, slot,
+                                anabolic_terms, catabolic_terms) {
+
+  all_conds <- c(ref_control, ref_disease, drug_conditions)
+  long <- compute_module_scores_long(seurat_obj, all_conds, module_list, group_by, assay, slot)
+
+  axis_order <- c(intersect(anabolic_terms, names(module_list)),
+                  intersect(catabolic_terms, names(module_list)),
+                  setdiff(names(module_list), c(anabolic_terms, catabolic_terms)))
+
+  wide <- long %>%
+    group_by(Condition, Module) %>%
+    summarise(Score = mean(Score, na.rm = TRUE), .groups = "drop") %>%
+    tidyr::pivot_wider(names_from = Module, values_from = Score) %>%
+    tibble::column_to_rownames("Condition")
+  wide <- wide[all_conds, axis_order, drop = FALSE]
+
+  # Relative scale: min/max across ONLY the conditions drawn (see section
+  # header) -- rescaled independently per module so every axis spans the
+  # full radius regardless of that module's absolute residual range.
+  mins <- apply(wide, 2, min, na.rm = TRUE)
+  maxs <- apply(wide, 2, max, na.rm = TRUE)
+  span <- maxs - mins
+  span[span == 0] <- 1
+  norm <- sweep(sweep(wide, 2, mins, "-"), 2, span, "/")
+
+  plot_df <- as.data.frame(rbind(rep(1, ncol(norm)), rep(0, ncol(norm)), norm))
+  colnames(plot_df) <- gsub("_", "\n", colnames(plot_df))
+  rownames(plot_df) <- c("max", "min", all_conds)
+
+  list(plot_df = plot_df, all_conds = all_conds)
+}
+
+#' Radar Chart of GO Module Scores, Relative to Displayed Conditions
+#'
+#' Draws an fmsb::radarchart() of mean per-condition module scores (same
+#' residual-based scoring as plot_dotplot_diff() / compute_module_scores_long()),
+#' rescaled to [0, 1] per module using only the min/max of the conditions
+#' being drawn (basal + IL-1b + drug_conditions) -- a relative, not universal,
+#' scale. Axes are ordered anabolic terms, then catabolic terms, then any
+#' remaining state modules (matching plot_dotplot_diff()'s facet order). All
+#' drug_conditions are overlaid on one polygon set -- see
+#' plot_radar_module_scores_split() for one panel per drug instead.
+#'
+#' @param seurat_obj A Seurat object.
+#' @param drug_conditions Character vector of drug condition labels to draw (e.g. "rapamycin_10").
+#' @param condition_labels Optional named vector: condition -> display label (used in the legend).
+#' @param module_list Named list of gene modules (default: GO_MODULES).
+#' @param group_by Metadata column (default "drug_condition").
+#' @param ref_control Basal condition (default COND_CONTROL).
+#' @param ref_disease IL-1β condition (default COND_DISEASE).
+#' @param assay,slot Assay/slot to score from (default "SCT"/"scale.data").
+#' @param drug_colors Colors for drug_conditions (default: PALETTE_NPG, offset past basal/IL-1b).
+#' @param anabolic_terms,catabolic_terms Axis ordering groups (default: config.R's GO_ANABOLIC_TERMS/GO_CATABOLIC_TERMS).
+#' @param pdf_file Output PDF path (NULL draws to the current device instead).
+#' @param width,height PDF dimensions in inches (only used when pdf_file is set).
+#' @return Invisibly, the [0,1]-normalized data frame used for plotting.
+#' @export
+plot_radar_module_scores <- function(seurat_obj,
+                                     drug_conditions,
+                                     condition_labels = NULL,
+                                     module_list      = GO_MODULES,
+                                     group_by         = "drug_condition",
+                                     ref_control      = COND_CONTROL,
+                                     ref_disease      = COND_DISEASE,
+                                     assay            = "SCT",
+                                     slot             = "scale.data",
+                                     drug_colors      = NULL,
+                                     anabolic_terms   = GO_ANABOLIC_TERMS,
+                                     catabolic_terms  = GO_CATABOLIC_TERMS,
+                                     pdf_file         = NULL,
+                                     width = 5.5, height = 5.5) {
+
+  prep <- .prep_radar_plot_df(seurat_obj, drug_conditions, module_list, group_by,
+                              ref_control, ref_disease, assay, slot,
+                              anabolic_terms, catabolic_terms)
+  plot_df   <- prep$plot_df
+  all_conds <- prep$all_conds
+
+  labels <- if (!is.null(condition_labels)) {
+    resolved <- condition_labels[all_conds]
+    resolved[is.na(resolved)] <- all_conds[is.na(resolved)]
+    unname(resolved)
+  } else all_conds
+
+  if (is.null(drug_colors)) drug_colors <- PALETTE_NPG[3:(2 + length(drug_conditions))]
+  n_drug <- length(drug_conditions)
+  line_colors <- c(COL_CONTROL, COL_DISEASE, drug_colors)
+  fill_colors <- c(scales::alpha(COL_CONTROL, 0.08), scales::alpha(COL_DISEASE, 0.08),
+                   scales::alpha(drug_colors, 0.15))
+
+  draw <- function() {
+    par(mar = c(1.5, 1.5, 2, 1.5))
+    fmsb::radarchart(plot_df, axistype = 1,
+                     pcol = line_colors, pfcol = fill_colors,
+                     plwd = c(1.2, 1.2, rep(2, n_drug)),
+                     plty = c(2, 2, rep(1, n_drug)),
+                     cglcol = "grey70", cglty = 1, axislabcol = "grey40",
+                     caxislabels = seq(0, 1, 0.25), cglwd = 0.8, vlcex = 0.85)
+    legend("topright", legend = labels, col = line_colors,
+          lty = c(2, 2, rep(1, n_drug)), lwd = 2, bty = "n", cex = 0.75,
+          inset = c(-0.05, -0.05), xpd = TRUE)
+  }
+
+  if (!is.null(pdf_file)) {
+    pdf(pdf_file, width = width, height = height)
+    on.exit(dev.off())
+    draw()
+  } else {
+    draw()
+  }
+
+  invisible(plot_df)
+}
+
+#' Radar Chart of GO Module Scores, One Panel Per Drug (Juxtaposed)
+#'
+#' Same relative-scale table as plot_radar_module_scores() -- module axes
+#' rescaled to [0, 1] using only basal / IL-1b / all drug_conditions taken
+#' together, so the panels stay on a shared, comparable scale -- but drawn
+#' as one radar panel per drug (side by side) instead of overlaying every
+#' drug's polygon on a single chart. Each panel repeats the basal/IL-1b
+#' reference polygons so every drug is seen against the same two baselines.
+#'
+#' @inheritParams plot_radar_module_scores
+#' @param drug_conditions Character vector of drug condition labels; one panel is drawn per element.
+#' @param ncol Number of panels per row (default: length(drug_conditions), i.e. one row).
+#' @param width,height PDF dimensions in inches (only used when pdf_file is set;
+#'   width defaults to ~3in per panel).
+#' @return Invisibly, the [0,1]-normalized data frame used for plotting (shared across panels).
+#' @export
+plot_radar_module_scores_split <- function(seurat_obj,
+                                           drug_conditions,
+                                           condition_labels = NULL,
+                                           module_list      = GO_MODULES,
+                                           group_by         = "drug_condition",
+                                           ref_control      = COND_CONTROL,
+                                           ref_disease      = COND_DISEASE,
+                                           assay            = "SCT",
+                                           slot             = "scale.data",
+                                           drug_colors      = NULL,
+                                           anabolic_terms   = GO_ANABOLIC_TERMS,
+                                           catabolic_terms  = GO_CATABOLIC_TERMS,
+                                           pdf_file         = NULL,
+                                           ncol             = length(drug_conditions),
+                                           width = NULL, height = 5.5) {
+
+  prep <- .prep_radar_plot_df(seurat_obj, drug_conditions, module_list, group_by,
+                              ref_control, ref_disease, assay, slot,
+                              anabolic_terms, catabolic_terms)
+  plot_df <- prep$plot_df
+  n_drug  <- length(drug_conditions)
+
+  if (is.null(drug_colors)) drug_colors <- PALETTE_NPG[3:(2 + n_drug)]
+  if (is.null(width)) width <- 3 * n_drug + 1
+
+  resolve_label <- function(cond) {
+    if (!is.null(condition_labels) && !is.na(condition_labels[cond])) {
+      unname(condition_labels[cond])
+    } else cond
+  }
+  ref_labels <- c(resolve_label(ref_control), resolve_label(ref_disease))
+
+  draw <- function() {
+    par(mfrow = c(ceiling(n_drug / ncol), ncol), mar = c(1.5, 1.5, 2.5, 1.5))
+    for (i in seq_len(n_drug)) {
+      drug <- drug_conditions[i]
+      panel_df <- plot_df[c("max", "min", ref_control, ref_disease, drug), , drop = FALSE]
+      fmsb::radarchart(panel_df, axistype = 1,
+                       pcol  = c(COL_CONTROL, COL_DISEASE, drug_colors[i]),
+                       pfcol = c(scales::alpha(COL_CONTROL, 0.08), scales::alpha(COL_DISEASE, 0.08),
+                                scales::alpha(drug_colors[i], 0.2)),
+                       plwd = c(1.2, 1.2, 2.2), plty = c(2, 2, 1),
+                       cglcol = "grey70", cglty = 1, axislabcol = "grey40",
+                       caxislabels = seq(0, 1, 0.25), cglwd = 0.8, vlcex = 0.85,
+                       title = resolve_label(drug))
+      if (i == 1) {
+        legend("topright", legend = ref_labels, col = c(COL_CONTROL, COL_DISEASE),
+              lty = 2, lwd = 1.2, bty = "n", cex = 0.7, inset = c(-0.05, -0.05), xpd = TRUE)
+      }
+    }
+  }
+
+  if (!is.null(pdf_file)) {
+    pdf(pdf_file, width = width, height = height)
+    on.exit(dev.off())
+    draw()
+  } else {
+    draw()
+  }
+
+  invisible(plot_df)
+}
+
+# -----------------------------------------------------------------------------
 # 4. Bliss synergy helpers (Figures 4c, 5d)
 # -----------------------------------------------------------------------------
 
@@ -547,6 +838,555 @@ draw_boxplots_for_genes_with_common_legend <- function(
   common_legend <- get_legend(dummy_plt)
 
   ncol_val   <- ceiling(length(genes) / nrow)
+  grid_plots <- arrangeGrob(grobs = plot_list, ncol = ncol_val, nrow = nrow)
+  arranged   <- grid.arrange(common_legend, grid_plots, ncol = 1,
+                              heights = c(legend_gap, 1))
+
+  ggdraw() +
+    draw_plot(arranged, x = 0.05, y = 0, width = 0.95, height = 1) +
+    draw_label(y_title, x = 0.02, y = 0.5, angle = 90, vjust = 0.5,
+               size = base_font_size + 2, fontface = "bold")
+}
+
+#' Publication-Ready Faceted Boxplots with Common Legend (Whisker-Zoomed)
+#'
+#' Identical to \code{draw_boxplots_for_genes_with_common_legend()} except the
+#' Y-axis zoom is anchored to the upper Tukey whisker (the largest value
+#' within 1.5*IQR of Q3, i.e. what \code{boxplot.stats()} would draw as the
+#' whisker) instead of the raw max. Some genes have a handful of extreme
+#' outlier cells that, even with \code{outlier.shape = NA} hiding the points,
+#' still stretch \code{ymax} enough to squash a real, significant IQR box
+#' down near zero. Since outlier points are already invisible, zooming to the
+#' whisker range doesn't drop or misrepresent any drawn geometry -- it only
+#' crops the window via \code{coord_cartesian()} (which never recomputes the
+#' box's quartiles/whiskers, unlike \code{scale_y_continuous(limits = ...)}),
+#' so the boxes and significance brackets remain statistically correct.
+#'
+#' @inheritParams draw_boxplots_for_genes_with_common_legend
+#' @export
+draw_boxplots_for_genes_with_common_legend_zoomed <- function(
+    seurat_object,
+    genes,
+    datatype        = "counts",
+    control_label   = COND_CONTROL,
+    treatment_label = COND_DISEASE,
+    extra_label1    = "label3",
+    extra_label2    = "label4",
+    color_palette   = NULL,
+    nrow            = 5,
+    base_font_size  = 6,
+    line_thickness  = 0.5,
+    legend_gap      = 0.05,
+    y_title         = "Normalized gene expression (a.u.)") {
+
+  if (is.null(color_palette)) {
+    color_palette <- setNames(
+      c("#4DBBD559", "#E64B3599", "#A6CEE3", "#1F78B4"),
+      c("Basal", "IL-1β", extra_label1, extra_label2)
+    )
+  }
+
+  meta <- seurat_object@meta.data
+  valid_conds  <- c(control_label, treatment_label, extra_label1, extra_label2)
+  cells_to_use <- rownames(meta)[meta$drug_condition %in% valid_conds]
+  level_order  <- c("Basal", "IL-1β", extra_label1, extra_label2)
+
+  meta_sub <- meta[cells_to_use, ] %>%
+    mutate(ConditionLabel = case_when(
+      drug_condition == control_label   ~ "Basal",
+      drug_condition == treatment_label ~ "IL-1β",
+      drug_condition == extra_label1    ~ extra_label1,
+      drug_condition == extra_label2    ~ extra_label2,
+      TRUE ~ as.character(drug_condition)
+    )) %>%
+    mutate(ConditionLabel = factor(ConditionLabel, levels = level_order))
+
+  plot_list <- lapply(genes, function(gene) {
+    expr <- as.vector(GetAssayData(seurat_object,
+                                   layer = datatype)[gene, cells_to_use, drop = TRUE])
+    df <- data.frame(Expression = expr, Condition = meta_sub$ConditionLabel)
+
+    # Upper Tukey whisker per group (largest value within 1.5*IQR of Q3) --
+    # matches what geom_boxplot() actually draws as the whisker, so zooming
+    # here never clips a visible box/whisker, only hidden outlier points.
+    group_vals <- split(df$Expression, df$Condition)
+    whisker_max <- vapply(group_vals, function(x) {
+      x <- x[!is.na(x)]
+      if (length(x) == 0) return(NA_real_)
+      if (length(x) < 2)  return(x[1])
+      boxplot.stats(x)$stats[5]
+    }, numeric(1))
+    ymax <- suppressWarnings(max(whisker_max, na.rm = TRUE))
+    if (!is.finite(ymax) || ymax == 0) ymax <- 1
+    # 8% of ymax per significance bracket — derived from chip well spacing geometry
+    step <- ymax * 0.08
+
+    p <- ggplot(df, aes(x = Condition, y = Expression, fill = Condition)) +
+      geom_boxplot(outlier.shape = NA, linewidth = line_thickness, alpha = 0.85) +
+      scale_fill_manual(values = color_palette) +
+      labs(title = gene) +
+      theme_classic() +
+      theme(text          = element_text(size = base_font_size),
+            axis.line     = element_line(linewidth = line_thickness, color = "black"),
+            axis.text.x   = element_blank(),
+            axis.ticks.x  = element_blank(),
+            axis.text.y   = element_text(size = base_font_size, color = "black"),
+            axis.title    = element_blank(),
+            plot.title    = element_text(face = "bold.italic", hjust = 0.5,
+                                         size = base_font_size + 2),
+            legend.position = "none",
+            plot.margin   = ggplot2::margin(10, 5, 2, 5))
+
+    group_counts <- table(df$Condition[!is.na(df$Expression)])
+    valid_groups <- names(group_counts)[group_counts >= 2]
+
+    if (length(valid_groups) >= 2) {
+      comps <- combn(valid_groups, 2, simplify = FALSE)
+      p <- p + geom_signif(
+        comparisons      = comps,
+        map_signif_level = TRUE,
+        y_position       = ymax + step * seq_along(comps),
+        textsize         = base_font_size * 0.35,
+        tip_length       = 0.01,
+        size             = 0.3,
+        vjust            = 0.5
+      ) + coord_cartesian(ylim = c(0, ymax + step * (length(comps) + 1)))
+    } else {
+      p <- p + coord_cartesian(ylim = c(0, ymax * 1.1))
+    }
+    p
+  })
+  names(plot_list) <- genes
+
+  dummy_df  <- data.frame(Condition  = factor(level_order, levels = level_order),
+                           Expression = rep(0.5, 4))
+  dummy_plt <- ggplot(dummy_df, aes(Condition, Expression, fill = Condition)) +
+    geom_boxplot() +
+    scale_fill_manual(values = color_palette) +
+    theme_classic() +
+    theme(legend.position = "top",
+          legend.text     = element_text(size = base_font_size + 2, face = "bold"),
+          legend.title    = element_blank(),
+          legend.key.size = unit(0.4, "cm"),
+          legend.margin   = ggplot2::margin(0, 0, 0, 0))
+
+  get_legend <- function(plt) {
+    tmp <- ggplot_gtable(ggplot_build(plt))
+    leg <- which(sapply(tmp$grobs, function(x) x$name) == "guide-box")
+    tmp$grobs[[leg]]
+  }
+  common_legend <- get_legend(dummy_plt)
+
+  ncol_val   <- ceiling(length(genes) / nrow)
+  grid_plots <- arrangeGrob(grobs = plot_list, ncol = ncol_val, nrow = nrow)
+  arranged   <- grid.arrange(common_legend, grid_plots, ncol = 1,
+                              heights = c(legend_gap, 1))
+
+  ggdraw() +
+    draw_plot(arranged, x = 0.05, y = 0, width = 0.95, height = 1) +
+    draw_label(y_title, x = 0.02, y = 0.5, angle = 90, vjust = 0.5,
+               size = base_font_size + 2, fontface = "bold")
+}
+
+#' Publication-Ready Faceted Boxplots with Common Legend (Jittered Points)
+#'
+#' Identical to \code{draw_boxplots_for_genes_with_common_legend()} (same
+#' raw-max Y-axis -- the full data range, not whisker-zoomed) but overlays
+#' each box with its individual cells as jittered points. For zero-inflated
+#' genes (Q1 = median = Q3 = 0, e.g. Ucma/Il6/Adamts5/Cxcl5 in this panel)
+#' the box itself is a degenerate point at zero no matter how the axis is
+#' scaled -- zooming to the whisker range only crops the very points that
+#' would explain a significant Wilcoxon result. Showing every cell instead
+#' keeps the axis honest (nothing cropped) while making the shift in
+#' detection rate / elevated counts between conditions visible by eye.
+#'
+#' @inheritParams draw_boxplots_for_genes_with_common_legend
+#' @param jitter_width Horizontal jitter width (default 0.15).
+#' @param jitter_size Point size (default 0.3).
+#' @param jitter_alpha Point alpha (default 0.35).
+#' @param jitter_color Point color (default "black").
+#' @export
+draw_boxplots_for_genes_with_common_legend_jitter <- function(
+    seurat_object,
+    genes,
+    datatype        = "counts",
+    control_label   = COND_CONTROL,
+    treatment_label = COND_DISEASE,
+    extra_label1    = "label3",
+    extra_label2    = "label4",
+    color_palette   = NULL,
+    nrow            = 5,
+    base_font_size  = 6,
+    line_thickness  = 0.5,
+    legend_gap      = 0.05,
+    y_title         = "Normalized gene expression (a.u.)",
+    jitter_width    = 0.15,
+    jitter_size     = 0.3,
+    jitter_alpha    = 0.35,
+    jitter_color    = "black") {
+
+  if (is.null(color_palette)) {
+    color_palette <- setNames(
+      c("#4DBBD559", "#E64B3599", "#A6CEE3", "#1F78B4"),
+      c("Basal", "IL-1β", extra_label1, extra_label2)
+    )
+  }
+
+  meta <- seurat_object@meta.data
+  valid_conds  <- c(control_label, treatment_label, extra_label1, extra_label2)
+  cells_to_use <- rownames(meta)[meta$drug_condition %in% valid_conds]
+  level_order  <- c("Basal", "IL-1β", extra_label1, extra_label2)
+
+  meta_sub <- meta[cells_to_use, ] %>%
+    mutate(ConditionLabel = case_when(
+      drug_condition == control_label   ~ "Basal",
+      drug_condition == treatment_label ~ "IL-1β",
+      drug_condition == extra_label1    ~ extra_label1,
+      drug_condition == extra_label2    ~ extra_label2,
+      TRUE ~ as.character(drug_condition)
+    )) %>%
+    mutate(ConditionLabel = factor(ConditionLabel, levels = level_order))
+
+  plot_list <- lapply(genes, function(gene) {
+    expr <- as.vector(GetAssayData(seurat_object,
+                                   layer = datatype)[gene, cells_to_use, drop = TRUE])
+    df <- data.frame(Expression = expr, Condition = meta_sub$ConditionLabel)
+
+    ymax <- max(df$Expression, na.rm = TRUE)
+    if (!is.finite(ymax) || ymax == 0) ymax <- 1
+    # 8% of ymax per significance bracket — derived from chip well spacing geometry
+    step <- ymax * 0.08
+
+    p <- ggplot(df, aes(x = Condition, y = Expression, fill = Condition)) +
+      geom_boxplot(outlier.shape = NA, linewidth = line_thickness, alpha = 0.85) +
+      geom_jitter(width = jitter_width, size = jitter_size, alpha = jitter_alpha,
+                  color = jitter_color) +
+      scale_fill_manual(values = color_palette) +
+      labs(title = gene) +
+      theme_classic() +
+      theme(text          = element_text(size = base_font_size),
+            axis.line     = element_line(linewidth = line_thickness, color = "black"),
+            axis.text.x   = element_blank(),
+            axis.ticks.x  = element_blank(),
+            axis.text.y   = element_text(size = base_font_size, color = "black"),
+            axis.title    = element_blank(),
+            plot.title    = element_text(face = "bold.italic", hjust = 0.5,
+                                         size = base_font_size + 2),
+            legend.position = "none",
+            plot.margin   = ggplot2::margin(10, 5, 2, 5))
+
+    group_counts <- table(df$Condition[!is.na(df$Expression)])
+    valid_groups <- names(group_counts)[group_counts >= 2]
+
+    if (length(valid_groups) >= 2) {
+      comps <- combn(valid_groups, 2, simplify = FALSE)
+      p <- p + geom_signif(
+        comparisons      = comps,
+        map_signif_level = TRUE,
+        y_position       = ymax + step * seq_along(comps),
+        textsize         = base_font_size * 0.35,
+        tip_length       = 0.01,
+        size             = 0.3,
+        vjust            = 0.5
+      ) + coord_cartesian(ylim = c(0, ymax + step * (length(comps) + 1)))
+    } else {
+      p <- p + coord_cartesian(ylim = c(0, ymax * 1.1))
+    }
+    p
+  })
+  names(plot_list) <- genes
+
+  dummy_df  <- data.frame(Condition  = factor(level_order, levels = level_order),
+                           Expression = rep(0.5, 4))
+  dummy_plt <- ggplot(dummy_df, aes(Condition, Expression, fill = Condition)) +
+    geom_boxplot() +
+    scale_fill_manual(values = color_palette) +
+    theme_classic() +
+    theme(legend.position = "top",
+          legend.text     = element_text(size = base_font_size + 2, face = "bold"),
+          legend.title    = element_blank(),
+          legend.key.size = unit(0.4, "cm"),
+          legend.margin   = ggplot2::margin(0, 0, 0, 0))
+
+  get_legend <- function(plt) {
+    tmp <- ggplot_gtable(ggplot_build(plt))
+    leg <- which(sapply(tmp$grobs, function(x) x$name) == "guide-box")
+    tmp$grobs[[leg]]
+  }
+  common_legend <- get_legend(dummy_plt)
+
+  ncol_val   <- ceiling(length(genes) / nrow)
+  grid_plots <- arrangeGrob(grobs = plot_list, ncol = ncol_val, nrow = nrow)
+  arranged   <- grid.arrange(common_legend, grid_plots, ncol = 1,
+                              heights = c(legend_gap, 1))
+
+  ggdraw() +
+    draw_plot(arranged, x = 0.05, y = 0, width = 0.95, height = 1) +
+    draw_label(y_title, x = 0.02, y = 0.5, angle = 90, vjust = 0.5,
+               size = base_font_size + 2, fontface = "bold")
+}
+
+#' Publication-Ready Faceted Violin Plots with Common Legend
+#'
+#' Same layout/inputs as \code{draw_boxplots_for_genes_with_common_legend()}
+#' (full data-range Y-axis, shared legend, Wilcoxon significance brackets),
+#' but each panel is a violin (kernel density per condition) with a thin
+#' inner boxplot for the quartiles, instead of a boxplot alone. For
+#' zero-inflated genes (Q1 = median = Q3 = 0, e.g. Ucma/Il6/Adamts5/Cxcl5 in
+#' this panel) a plain box collapses to a point regardless of axis scaling;
+#' the violin's width still encodes the density difference between
+#' conditions (e.g. a fatter tail / lower mass-at-zero in IL-1β), so the
+#' shift stays visible without needing to crop the axis or overplot points.
+#'
+#' @inheritParams draw_boxplots_for_genes_with_common_legend
+#' @param inner_box_width Width of the thin quartile boxplot drawn inside
+#'   each violin (default 0.08).
+#' @export
+draw_violins_for_genes_with_common_legend <- function(
+    seurat_object,
+    genes,
+    datatype        = "counts",
+    control_label   = COND_CONTROL,
+    treatment_label = COND_DISEASE,
+    extra_label1    = "label3",
+    extra_label2    = "label4",
+    color_palette   = NULL,
+    nrow            = 5,
+    base_font_size  = 6,
+    line_thickness  = 0.5,
+    legend_gap      = 0.05,
+    y_title         = "Normalized gene expression (a.u.)",
+    inner_box_width = 0.08) {
+
+  if (is.null(color_palette)) {
+    color_palette <- setNames(
+      c("#4DBBD559", "#E64B3599", "#A6CEE3", "#1F78B4"),
+      c("Basal", "IL-1β", extra_label1, extra_label2)
+    )
+  }
+
+  meta <- seurat_object@meta.data
+  valid_conds  <- c(control_label, treatment_label, extra_label1, extra_label2)
+  cells_to_use <- rownames(meta)[meta$drug_condition %in% valid_conds]
+  level_order  <- c("Basal", "IL-1β", extra_label1, extra_label2)
+
+  meta_sub <- meta[cells_to_use, ] %>%
+    mutate(ConditionLabel = case_when(
+      drug_condition == control_label   ~ "Basal",
+      drug_condition == treatment_label ~ "IL-1β",
+      drug_condition == extra_label1    ~ extra_label1,
+      drug_condition == extra_label2    ~ extra_label2,
+      TRUE ~ as.character(drug_condition)
+    )) %>%
+    mutate(ConditionLabel = factor(ConditionLabel, levels = level_order))
+
+  plot_list <- lapply(genes, function(gene) {
+    expr <- as.vector(GetAssayData(seurat_object,
+                                   layer = datatype)[gene, cells_to_use, drop = TRUE])
+    df <- data.frame(Expression = expr, Condition = meta_sub$ConditionLabel)
+
+    ymax <- max(df$Expression, na.rm = TRUE)
+    if (!is.finite(ymax) || ymax == 0) ymax <- 1
+    # 8% of ymax per significance bracket — derived from chip well spacing geometry
+    step <- ymax * 0.08
+
+    p <- ggplot(df, aes(x = Condition, y = Expression, fill = Condition)) +
+      geom_violin(linewidth = line_thickness, alpha = 0.85, scale = "width",
+                  trim = TRUE) +
+      geom_boxplot(width = inner_box_width, outlier.shape = NA,
+                   linewidth = line_thickness, fill = "white", alpha = 0.6) +
+      scale_fill_manual(values = color_palette) +
+      labs(title = gene) +
+      theme_classic() +
+      theme(text          = element_text(size = base_font_size),
+            axis.line     = element_line(linewidth = line_thickness, color = "black"),
+            axis.text.x   = element_blank(),
+            axis.ticks.x  = element_blank(),
+            axis.text.y   = element_text(size = base_font_size, color = "black"),
+            axis.title    = element_blank(),
+            plot.title    = element_text(face = "bold.italic", hjust = 0.5,
+                                         size = base_font_size + 2),
+            legend.position = "none",
+            plot.margin   = ggplot2::margin(10, 5, 2, 5))
+
+    group_counts <- table(df$Condition[!is.na(df$Expression)])
+    valid_groups <- names(group_counts)[group_counts >= 2]
+
+    if (length(valid_groups) >= 2) {
+      comps <- combn(valid_groups, 2, simplify = FALSE)
+      p <- p + geom_signif(
+        comparisons      = comps,
+        map_signif_level = TRUE,
+        y_position       = ymax + step * seq_along(comps),
+        textsize         = base_font_size * 0.35,
+        tip_length       = 0.01,
+        size             = 0.3,
+        vjust            = 0.5
+      ) + coord_cartesian(ylim = c(0, ymax + step * (length(comps) + 1)))
+    } else {
+      p <- p + coord_cartesian(ylim = c(0, ymax * 1.1))
+    }
+    p
+  })
+  names(plot_list) <- genes
+
+  dummy_df  <- data.frame(Condition  = factor(level_order, levels = level_order),
+                           Expression = rep(0.5, 4))
+  dummy_plt <- ggplot(dummy_df, aes(Condition, Expression, fill = Condition)) +
+    geom_boxplot() +
+    scale_fill_manual(values = color_palette) +
+    theme_classic() +
+    theme(legend.position = "top",
+          legend.text     = element_text(size = base_font_size + 2, face = "bold"),
+          legend.title    = element_blank(),
+          legend.key.size = unit(0.4, "cm"),
+          legend.margin   = ggplot2::margin(0, 0, 0, 0))
+
+  get_legend <- function(plt) {
+    tmp <- ggplot_gtable(ggplot_build(plt))
+    leg <- which(sapply(tmp$grobs, function(x) x$name) == "guide-box")
+    tmp$grobs[[leg]]
+  }
+  common_legend <- get_legend(dummy_plt)
+
+  ncol_val   <- ceiling(length(genes) / nrow)
+  grid_plots <- arrangeGrob(grobs = plot_list, ncol = ncol_val, nrow = nrow)
+  arranged   <- grid.arrange(common_legend, grid_plots, ncol = 1,
+                              heights = c(legend_gap, 1))
+
+  ggdraw() +
+    draw_plot(arranged, x = 0.05, y = 0, width = 0.95, height = 1) +
+    draw_label(y_title, x = 0.02, y = 0.5, angle = 90, vjust = 0.5,
+               size = base_font_size + 2, fontface = "bold")
+}
+
+#' Publication-Ready Faceted Boxplots of Class-Summed Gene Expression
+#'
+#' Same structure as \code{draw_boxplots_for_genes_with_common_legend()}, but
+#' each panel is a named gene panel (e.g. Anabolic/Catabolic) rather than a
+#' single gene, and the plotted value is the per-cell sum of counts across
+#' the panel's genes rather than a single gene's expression.
+#'
+#' @param seurat_object A Seurat object.
+#' @param gene_sets Named list of character vectors (e.g. list(Anabolic = ..., Catabolic = ...)).
+#' @param datatype Data slot (default "counts").
+#' @param control_label Metadata string for healthy baseline (default COND_CONTROL).
+#' @param treatment_label Metadata string for disease baseline (default COND_DISEASE).
+#' @param extra_label1 Third condition label (default "label3").
+#' @param extra_label2 Fourth condition label (default "label4").
+#' @param color_palette Named color vector. If NULL uses the default four-color palette.
+#' @param nrow Number of rows in the panel grid (default 1).
+#' @param base_font_size Base font size (default 6).
+#' @param line_thickness Axis/boxplot line width (default 0.5).
+#' @param legend_gap Fractional height reserved for the legend (default 0.05).
+#' @param y_title Shared Y-axis title.
+#' @return A combined cowplot object.
+#' @export
+draw_boxplots_for_gene_sums_with_common_legend <- function(
+    seurat_object,
+    gene_sets,
+    datatype        = "counts",
+    control_label   = COND_CONTROL,
+    treatment_label = COND_DISEASE,
+    extra_label1    = "label3",
+    extra_label2    = "label4",
+    color_palette   = NULL,
+    nrow            = 1,
+    base_font_size  = 6,
+    line_thickness  = 0.5,
+    legend_gap      = 0.05,
+    y_title         = "Summed gene counts") {
+
+  if (is.null(color_palette)) {
+    color_palette <- setNames(
+      c("#4DBBD559", "#E64B3599", "#A6CEE3", "#1F78B4"),
+      c("Basal", "IL-1β", extra_label1, extra_label2)
+    )
+  }
+
+  meta <- seurat_object@meta.data
+  valid_conds  <- c(control_label, treatment_label, extra_label1, extra_label2)
+  cells_to_use <- rownames(meta)[meta$drug_condition %in% valid_conds]
+  level_order  <- c("Basal", "IL-1β", extra_label1, extra_label2)
+
+  meta_sub <- meta[cells_to_use, ] %>%
+    mutate(ConditionLabel = case_when(
+      drug_condition == control_label   ~ "Basal",
+      drug_condition == treatment_label ~ "IL-1β",
+      drug_condition == extra_label1    ~ extra_label1,
+      drug_condition == extra_label2    ~ extra_label2,
+      TRUE ~ as.character(drug_condition)
+    )) %>%
+    mutate(ConditionLabel = factor(ConditionLabel, levels = level_order))
+
+  plot_list <- lapply(names(gene_sets), function(set_name) {
+    genes    <- intersect(gene_sets[[set_name]], rownames(seurat_object))
+    expr_mat <- GetAssayData(seurat_object, layer = datatype)[genes, cells_to_use, drop = FALSE]
+    expr     <- Matrix::colSums(expr_mat)
+    df <- data.frame(Expression = expr, Condition = meta_sub$ConditionLabel)
+
+    ymax <- max(df$Expression, na.rm = TRUE)
+    if (!is.finite(ymax) || ymax == 0) ymax <- 1
+    # 8% of ymax per significance bracket — derived from chip well spacing geometry
+    step <- ymax * 0.08
+
+    p <- ggplot(df, aes(x = Condition, y = Expression, fill = Condition)) +
+      geom_boxplot(outlier.shape = NA, linewidth = line_thickness, alpha = 0.85) +
+      scale_fill_manual(values = color_palette) +
+      labs(title = set_name) +
+      theme_classic() +
+      theme(text          = element_text(size = base_font_size),
+            axis.line     = element_line(linewidth = line_thickness, color = "black"),
+            axis.text.x   = element_blank(),
+            axis.ticks.x  = element_blank(),
+            axis.text.y   = element_text(size = base_font_size, color = "black"),
+            axis.title    = element_blank(),
+            plot.title    = element_text(face = "bold", hjust = 0.5,
+                                         size = base_font_size + 2),
+            legend.position = "none",
+            plot.margin   = ggplot2::margin(10, 5, 2, 5))
+
+    group_counts <- table(df$Condition[!is.na(df$Expression)])
+    valid_groups <- names(group_counts)[group_counts >= 2]
+
+    if (length(valid_groups) >= 2) {
+      comps <- combn(valid_groups, 2, simplify = FALSE)
+      p <- p + geom_signif(
+        comparisons      = comps,
+        map_signif_level = TRUE,
+        y_position       = ymax + step * seq_along(comps),
+        textsize         = base_font_size * 0.35,
+        tip_length       = 0.01,
+        size             = 0.3,
+        vjust            = 0.5
+      ) + coord_cartesian(ylim = c(0, ymax + step * (length(comps) + 1)))
+    } else {
+      p <- p + coord_cartesian(ylim = c(0, ymax * 1.1))
+    }
+    p
+  })
+  names(plot_list) <- names(gene_sets)
+
+  dummy_df  <- data.frame(Condition  = factor(level_order, levels = level_order),
+                           Expression = rep(0.5, 4))
+  dummy_plt <- ggplot(dummy_df, aes(Condition, Expression, fill = Condition)) +
+    geom_boxplot() +
+    scale_fill_manual(values = color_palette) +
+    theme_classic() +
+    theme(legend.position = "top",
+          legend.text     = element_text(size = base_font_size + 2, face = "bold"),
+          legend.title    = element_blank(),
+          legend.key.size = unit(0.4, "cm"),
+          legend.margin   = ggplot2::margin(0, 0, 0, 0))
+
+  get_legend <- function(plt) {
+    tmp <- ggplot_gtable(ggplot_build(plt))
+    leg <- which(sapply(tmp$grobs, function(x) x$name) == "guide-box")
+    tmp$grobs[[leg]]
+  }
+  common_legend <- get_legend(dummy_plt)
+
+  ncol_val   <- ceiling(length(gene_sets) / nrow)
   grid_plots <- arrangeGrob(grobs = plot_list, ncol = ncol_val, nrow = nrow)
   arranged   <- grid.arrange(common_legend, grid_plots, ncol = 1,
                               heights = c(legend_gap, 1))

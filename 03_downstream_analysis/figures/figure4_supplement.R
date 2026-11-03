@@ -3,7 +3,7 @@
 #
 # Subfigures:
 #   Extended Data: 5-fold CV performance comparison across 5 ML models
-#   Extended Data: 6-panel GO module score violin plots
+#   Extended Data: 7-panel GO module score violin plots
 #
 # Prerequisites: config.R, utils.R, data_loading.R, scoring_methods.R
 # Inputs: PRED_DIR/cv_results_per_fold.csv (written by scoring_methods.R),

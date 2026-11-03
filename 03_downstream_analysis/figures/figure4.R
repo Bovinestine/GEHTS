@@ -5,9 +5,14 @@
 #   4b: Efficacy bar plot (mean ± SEM per drug, two doses)
 #   4c: 2D phenotypic screening scatter (anabolic vs. catabolic)
 #   4d: Dumbbell plot of differential co-expression (disease→treatment→healthy)
-#   4e: Compact dot plot, 7 GO module scores per drug (Δ residual vs. IL-1β;
-#       dot size = Wilcoxon/BH significance), from the shared residual-based
-#       plot_dotplot_diff() in utils.R
+#   4e: 7 GO module scores per drug, shown two ways for comparison:
+#         - dot plot: Δ residual vs. IL-1β (dot size = Wilcoxon/BH
+#           significance), universal scale, from plot_dotplot_diff()
+#         - radar chart: same residual module scores, but each axis is
+#           rescaled to [0, 1] using only basal / IL-1β / the two selected
+#           drugs (rapamycin, ALK5 inhibitor IV) -- a relative scale, not a
+#           universal one over the whole drug library -- from the new
+#           plot_radar_module_scores() in utils.R
 #
 # Prerequisites: config.R, utils.R, data_loading.R, prediction_score.R
 # Inputs: sin.sct, cmb.sct, mac.sct, prob_sng10_rf, prob_sng0.1_rf,
@@ -313,14 +318,15 @@ ggsave(file.path(OUTPUT_MAIN, "Figure4d_coexpression_dumbbell.pdf"),
 # =============================================================================
 # Figure 4e — 7 GO module scores per drug (residual-based)
 #
-# plot_dotplot_diff() is the shared, module-list-parameterized function
-# defined once in utils.R (also used by Fig 5f) -- see utils.R section 3b.
+# plot_dotplot_diff() and plot_radar_module_scores() are the shared,
+# module-list-parameterized functions defined once in utils.R (dot plot also
+# used by Fig 5f) -- see utils.R sections 3b/3c.
 # =============================================================================
 
 drug_targets <- c("rapamycin_10", "ALK5 inhibitor IV_10")
 drug_labels  <- c(rapamycin_10 = "Rapamycin (10 μM)", `ALK5 inhibitor IV_10` = "ALK5 Inhibitor (10 μM)")
 
-## Dot plot, diff color + Wilcoxon/BH significance size ----
+## Dot plot, diff color + Wilcoxon/BH significance size (universal scale) ----
 fig4e_dotplot_significance <- plot_dotplot_diff(
   mac_sin.sct,
   plot_conditions   = c(drug_targets, COND_CONTROL),
@@ -328,5 +334,29 @@ fig4e_dotplot_significance <- plot_dotplot_diff(
 )
 ggsave(file.path(OUTPUT_MAIN, "Figure4e_dotplot_significance.pdf"),
        plot = fig4e_dotplot_significance, width = 6.5, height = 5.5, dpi = 300)
+
+## Radar chart, same module scores, drug-relative scale (basal + IL-1b +
+## the two selected drugs only -- not a universal scale over all drugs) ----
+radar_condition_labels <- c(setNames("Basal", COND_CONTROL),
+                           setNames("IL-1β", COND_DISEASE),
+                           drug_labels)
+
+plot_radar_module_scores(
+  mac_sin.sct,
+  drug_conditions   = drug_targets,
+  condition_labels  = radar_condition_labels,
+  pdf_file          = file.path(OUTPUT_MAIN, "Figure4e_radar_relative.pdf"),
+  width = 5.5, height = 5.5
+)
+
+## Same relative-scale table, but juxtaposed as one panel per drug rather
+## than overlaid on a single polygon set ----
+plot_radar_module_scores_split(
+  mac_sin.sct,
+  drug_conditions   = drug_targets,
+  condition_labels  = radar_condition_labels,
+  pdf_file          = file.path(OUTPUT_MAIN, "Figure4e_radar_split.pdf"),
+  height = 5
+)
 
 save_session_info("figure4")

@@ -15,7 +15,7 @@
 #   5. prediction_score.R  — generate efficacy predictions
 #   6. figure1.R           — Figure 1 (platform comparison)
 #   7. figure2.R           — Figure 2 (heatmap, UMAP, volcano, divergence)
-#   8. figure2_supplement.R — Ext. Data Fig. 5a, 5b, 6, 7
+#   8. figure2_supplement.R — Ext. Data Fig. 5a, 5b, 5c, 6, 7
 #   9. figure3.R           — Figure 3b–3c (heatmap, UMAP)
 #  10. figure3_supplement.R — Ext. Data Fig. 3 (boxplots), Ext. Data Fig. 8 (UMAPs)
 #  11. figure4.R           — Figure 4b–4f

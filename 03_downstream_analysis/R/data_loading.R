@@ -37,6 +37,7 @@ library(SeuratDisk)
 .load_rdata(file.path(DATA_DIR, "seurat_cmb.pub.Rdata"), "cmb.pub - combo-drug screen (raw)")
 .load_rdata(file.path(DATA_DIR, "seurat_rna.pub.Rdata"), "rna.pub - bulk RNA-seq (raw)")
 .load_rdata(file.path(DATA_DIR, "seurat_rna.ref.Rdata"), "rna.ref - bulk RNA-seq (raw)")
+.load_rdata(file.path(DATA_DIR, "seurat_atdc5.pub.Rdata"), "atdc5.pub - ATDC5 cell line, GSE269585 37C baseline (raw)")
 
 # -----------------------------------------------------------------------------
 # 2. SCTransform-normalized Seurat objects
@@ -44,7 +45,6 @@ library(SeuratDisk)
 .load_rdata(file.path(DATA_DIR, "seurat_mac.sct.Rdata"), "mac.sct - primary MAC (SCT)")
 .load_rdata(file.path(DATA_DIR, "seurat_sin.sct.Rdata"), "sin.sct - single-drug screen (SCT)")
 .load_rdata(file.path(DATA_DIR, "seurat_cmb.sct.Rdata"), "cmb.sct - combo-drug screen (SCT)")
-.load_rdata(file.path(DATA_DIR, "seurat_rna.sct.Rdata"), "rna.sct - bulk RNA-seq (SCT)")
 
 # -----------------------------------------------------------------------------
 # 3. External RNA-seq reference (Sebastian 2021, healthy MAC)
@@ -71,7 +71,7 @@ if (!is.null(macSebastian)) {
 # -----------------------------------------------------------------------------
 # 5. Trained prediction models
 # -----------------------------------------------------------------------------
-en_model  <- .load_rds(file.path(PRED_DIR, "Elastic Net_model.rds"),  "en_model  - Elastic Net")
+en_model  <- .load_rds(file.path(PRED_DIR, "Elastic_net_model.rds"),  "en_model  - Elastic Net")
 rf_model  <- .load_rds(file.path(PRED_DIR, "Random_forest_model.rds"), "rf_model  - Random Forest")
 xgb_model <- .load_rds(file.path(PRED_DIR, "XGBoost_model.rds"),      "xgb_model - XGBoost")
 svr_model <- .load_rds(file.path(PRED_DIR, "SVR_model.rds"),          "svr_model - SVR")

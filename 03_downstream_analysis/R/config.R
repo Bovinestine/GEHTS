@@ -44,7 +44,7 @@ GO_MODULES <- list(
   Skeletal_System_Development = c("Acan", "Col2a1", "Col27a1", "Matn1", "Matn3", "Pth1r", "Ucma"),
   Chondrocyte_Development     = c("Col27a1", "Matn1", "Sox9"),
   Chondrocyte_Differentiation = c("Col2a1", "Col27a1", "Matn1", "Pth1r", "Sox9"),
-  ECM_Disassembly             = c("Adamts5", "Mmp3", "Mmp13", "Il6"),
+  Collagen_Catabolic_Process  = c("Mmp3", "Mmp13"),
   Inflammatory_Response       = c("Il6", "Mmp3", "Tlr2", "Tnfrsf1b"),
   Cell_Chemotaxis             = c("Ccl2", "Cxcl1", "Cxcl5", "Il6"),
   Programmed_Cell_Death       = c("Ccl2", "Gadd45g", "Igfbp3", "Il6", "Tnfrsf1b")
@@ -57,7 +57,7 @@ GO_MODULES <- list(
 GO_ANABOLIC_TERMS  <- c("Skeletal_System_Development",
                          "Chondrocyte_Development",
                          "Chondrocyte_Differentiation")
-GO_CATABOLIC_TERMS <- c("ECM_Disassembly",
+GO_CATABOLIC_TERMS <- c("Collagen_Catabolic_Process",
                          "Inflammatory_Response",
                          "Cell_Chemotaxis")
 
@@ -80,6 +80,15 @@ PADJ_CUTOFF <- 0.05    # fgsea: BH-adjusted p-value significance threshold
 COND_CONTROL     <- "control"
 COND_DISEASE     <- "inflammatory"
 
+# Top-5 combination hits by Bliss synergy + ML efficacy rank-sum at 0.1 uM,
+# cached from plot_bliss_synergy()'s ranking for convenience (e.g. quick
+# reference outside the full Figure 5 pipeline). figure5.R recomputes this
+# dynamically as top5_combos <- synergy_results$top_candidates$std_combi --
+# that call remains the source of truth; re-sync this constant if the
+# combo screen data or ranking changes.
+TOP5_COMBOS <- c("KU0063794&rapamycin", "SANT-1&SB431542", "rapamycin&SANT-1",
+                 "SB525334&XAV", "MK-2206 dihydrochloride&pamapimod")
+
 # -----------------------------------------------------------------------------
 # 4. File paths (all relative via here::here() — no absolute paths)
 # -----------------------------------------------------------------------------
@@ -97,11 +106,11 @@ SESSION_DIR <- here::here("03_downstream_analysis", "session_info")
 GO_MODULES_JSON <- here::here("03_downstream_analysis", "output", "gsea", "go_modules.json")
 
 # CSV data file for Figure 1
-PLATFORM_CSV <- here::here("03_downstream_analysis",
+PLATFORM_CSV <- here::here("Rdata", "pub",
                             "Transcriptomic_Screening_Platform_Comparison.csv")
 
 # External reference RNA-seq
-SEBASTIAN_RDS <- here::here("RNA-seq", "macCtrl_sebastian.rds")
+SEBASTIAN_RDS <- here::here("Rdata", "pub", "macCtrl_sebastian.rds")
 
 # External DEG result (VST counts, near-genome-wide, NOT pre-filtered)
 EXTERNAL_DEG_VST_CSV <- here::here("Rdata", "pub",
